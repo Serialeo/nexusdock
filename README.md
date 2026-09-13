@@ -4,9 +4,9 @@
 
 如果你在多台 Mac、Windows 或服务器上使用 AgentDock，可以用 NexusDock 提供一个统一的 Web 控制台和 MCP 入口，集中管理设备、Recall、Workflow 与常用运行时能力。
 
-- AgentDock 私有主线：<https://github.com/Serialeo/agentdock>
+- AgentDock：<https://github.com/Serialeo/agentdock>
 - GitHub Container Registry：<https://github.com/Serialeo/nexusdock/pkgs/container/nexusdock>
-- 私有 Releases：<https://github.com/Serialeo/nexusdock/releases>
+- Releases：<https://github.com/Serialeo/nexusdock/releases>
 
 ## 能做什么
 
@@ -20,22 +20,15 @@ NexusDock 不替代 AgentDock。命令执行、文件操作、浏览器、Skill�
 
 ## 快速开始
 
-普通部署直接使用 Serialeo 私有 GHCR 镜像即可，不需要安装 Go 或 Node.js。
+普通部署直接使用 Serialeo 公共 GHCR 镜像即可，不需要安装 Go 或 Node.js。
 
-私有主线只发布到：
+容器发布到：
 
 ```text
 ghcr.io/serialeo/nexusdock
 ```
 
-镜像仅发布 `linux/amd64`。下面示例为了简洁使用 `latest`；生产环境优先使用 [Serialeo 私有 Releases](https://github.com/Serialeo/nexusdock/releases) 对应的固定 release tag，关键部署可进一步固定 image digest。AgentDock 与 NexusDock 应按同一 release manifest 中验证过的 Bridge generation 成对升级。
-
-私有 GHCR 拉取前先登录。按照 GitHub 当前规则，命令行拉取私有 package 可使用带 `read:packages` 的 personal access token (classic)，同时登录账号需要拥有 package 的读取权限。Token 不要写入 Compose 文件，也不要提交到 Git。
-
-```bash
-export CR_PAT='<read:packages token>'
-echo "$CR_PAT" | docker login ghcr.io -u '<github-username>' --password-stdin
-```
+镜像仅发布 `linux/amd64`。下面示例为了简洁使用 `latest`；生产环境优先使用 [Serialeo Releases](https://github.com/Serialeo/nexusdock/releases) 对应的固定 release tag，关键部署可进一步固定 image digest。AgentDock 与 NexusDock 应按同一 release manifest 中验证过的 Bridge generation 成对升级。Package 设为 Public 后可匿名拉取，不需要 GitHub 登录或 package token。
 
 ### 1. 创建目录
 
@@ -331,14 +324,7 @@ make web-deps
 make build
 ```
 
-源码构建依赖私有 `github.com/Serialeo/agentdock-protocol` module。为 Git/Go 配置一个仅能读取 `Serialeo/agentdock-protocol`、`Contents: Read` 的最小权限机器凭据，并设置：
-
-```bash
-export GOPRIVATE='github.com/Serialeo/*'
-export GONOSUMDB='github.com/Serialeo/*'
-```
-
-不要把人类账号的长期 token 复制给服务用户，也不要把 token 写入仓库。
+源码构建依赖公开的 `github.com/Serialeo/agentdock-protocol` module，不需要额外仓库凭据或 `GOPRIVATE` 配置。
 
 开发检查：
 
@@ -347,16 +333,13 @@ make check
 make ci
 ```
 
-仓库自带的 `docker-compose.yml` 是生产拉取配置，不再隐式执行源码 build。开发 Docker build 使用显式 override，并通过 BuildKit secret 提供 protocol 只读凭据：
+仓库自带的 `docker-compose.yml` 是生产拉取配置，不再隐式执行源码 build。开发 Docker build 使用显式 override，且不需要 GitHub token：
 
 ```bash
-export PRIVATE_GO_READ_TOKEN='<Serialeo/agentdock-protocol Contents: Read token>'
 docker compose -f docker-compose.yml -f docker-compose.dev.yml build nexusdock
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 ```
 
-`PRIVATE_GO_READ_TOKEN` 只在 build 阶段挂载，不会作为 Dockerfile `ARG` 写入镜像层。更多开发约束见 [`AGENTS.md`](./AGENTS.md)。
+更多开发约束见 [`AGENTS.md`](./AGENTS.md)。
 
-私有容器发行采用“候选镜像先验收、最终 tag 后发布”的顺序。源码 CI 通过后，在目标 commit 上手动运行 **Publish container**；非 `v*` 的 workflow dispatch 只发布 `ghcr.io/serialeo/nexusdock:sha-<short-commit>`，不会更新 `latest`。AgentDock 同步运行 **Publish candidate containers** 生成 runtime/dev/browser 三个 `sha-*` 候选。随后在本仓运行 **Verify paired private images**，传入四个精确 SHA 标签或 digest；该 workflow 会验证私有可见性、多架构 manifest、镜像凭据泄漏、各 variant 启动、真实 A↔N 配对、Global/Node/Direct/Stage3 设置以及 A/N 数据卷重启持久化。只有这一步通过后才创建配套的最终 A/N `v*` tag；最终 tag workflow 才更新 `latest`。
-
-跨仓拉取 AgentDock 私有 package 时，不要额外塞一个个人 package token 给该 workflow。应在 AgentDock package 的 Actions access 中授予 `Serialeo/nexusdock` 仓库读取权限，使本仓 `GITHUB_TOKEN` 以仓库身份读取配套镜像。
+容器发行采用“候选镜像先验收、最终 tag 后发布”的顺序。源码 CI 通过后，在目标 commit 上手动运行 **Publish container**；非 `v*` 的 workflow dispatch 只发布 `ghcr.io/serialeo/nexusdock:sha-<short-commit>`，不会更新 `latest`。AgentDock 同步运行 **Publish candidate containers** 生成 runtime/dev/browser 三个 `sha-*` 候选。随后在本仓运行 **Verify paired public images**，传入四个精确 SHA 标签或 digest；该 workflow 会直接匿名拉取镜像，并验证多架构 manifest、镜像凭据泄漏、各 variant 启动、真实 A↔N 配对、Global/Node/Direct/Stage3 设置以及 A/N 数据卷重启持久化。正式发布前应确保 `Serialeo/agentdock` 和 `Serialeo/nexusdock` 两个 GHCR container package 均已设为 Public。

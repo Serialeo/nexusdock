@@ -21,11 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure private Go module access
-        uses: ./.github/actions/setup-private-go
-        with:
-          token: ${{ secrets.PRIVATE_GO_READ_TOKEN }}
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -44,6 +39,4 @@ jobs:
         run: git diff --exit-code
 
       - name: Build production image
-        env:
-          PRIVATE_GO_READ_TOKEN: ${{ secrets.PRIVATE_GO_READ_TOKEN }}
-        run: docker build --secret id=github_token,env=PRIVATE_GO_READ_TOKEN --tag nexusdock:ci .
+        run: docker build --tag nexusdock:ci .
