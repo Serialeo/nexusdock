@@ -1,7 +1,6 @@
 services:
   nexusdock:
-    build: .
-    image: nexusdock:local
+    image: ${NEXUS_IMAGE:-ghcr.io/serialeo/nexusdock:latest}
     container_name: nexusdock
     restart: unless-stopped
     read_only: true
@@ -10,7 +9,7 @@ services:
     security_opt:
       - no-new-privileges:true
     ports:
-      - "127.0.0.1:18777:18777"
+      - "127.0.0.1:18778:18777"
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m,uid=10001,gid=10001,mode=0700
     volumes:

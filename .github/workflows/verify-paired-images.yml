@@ -1,0 +1,154 @@
+name: Verify paired private images
+
+on:
+  workflow_dispatch:
+    inputs:
+      agentdock_image:
+        description: Exact AgentDock runtime image tag or digest (for example ghcr.io/serialeo/agentdock:sha-abcdef0)
+        required: true
+        type: string
+      agentdock_browser_image:
+        description: Exact AgentDock browser image tag or digest
+        required: true
+        type: string
+      agentdock_dev_image:
+        description: Exact AgentDock dev image tag or digest
+        required: true
+        type: string
+      nexusdock_image:
+        description: Exact NexusDock runtime image tag or digest (for example ghcr.io/serialeo/nexusdock:sha-abcdef0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  verify:
+    name: Private GHCR and Bridge v4 smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AGENTDOCK_IMAGE: ${{ inputs.agentdock_image }}
+      AGENTDOCK_BROWSER_IMAGE: ${{ inputs.agentdock_browser_image }}
+      AGENTDOCK_DEV_IMAGE: ${{ inputs.agentdock_dev_image }}
+      NEXUS_IMAGE: ${{ inputs.nexusdock_image }}
+
+    steps:
+      - name: Checkout NexusDock
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prove private images reject anonymous pull
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          for image in "$AGENTDOCK_IMAGE" "$AGENTDOCK_BROWSER_IMAGE" "$AGENTDOCK_DEV_IMAGE" "$NEXUS_IMAGE"; do
+            if docker pull "$image" >"$RUNNER_TEMP/anonymous-pull.log" 2>&1; then
+              echo "error: anonymous pull unexpectedly succeeded for $image" >&2
+              exit 1
+            fi
+            echo "anonymous pull rejected: $image"
+          done
+
+      # This repository's GITHUB_TOKEN can always read its own NexusDock package.
+      # For the cross-repository AgentDock package, grant Serialeo/nexusdock Actions
+      # read access in the AgentDock package settings instead of adding a personal
+      # package token to this workflow.
+      - name: Login to private GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull exact images
+        shell: bash
+        run: |
+          set -euo pipefail
+          for image in "$AGENTDOCK_IMAGE" "$AGENTDOCK_BROWSER_IMAGE" "$AGENTDOCK_DEV_IMAGE" "$NEXUS_IMAGE"; do
+            docker pull "$image"
+          done
+
+      - name: Report immutable pulled digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for image in "$AGENTDOCK_IMAGE" "$AGENTDOCK_BROWSER_IMAGE" "$AGENTDOCK_DEV_IMAGE" "$NEXUS_IMAGE"; do
+            repo_digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$image")"
+            [[ "$repo_digest" == *@sha256:* ]] || {
+              echo "error: no immutable RepoDigest resolved for $image: $repo_digest" >&2
+              exit 1
+            }
+            echo "R5_IMAGE_DIGEST $image $repo_digest"
+          done
+
+      - name: Verify linux/amd64 manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for image in "$AGENTDOCK_IMAGE" "$AGENTDOCK_BROWSER_IMAGE" "$AGENTDOCK_DEV_IMAGE" "$NEXUS_IMAGE"; do
+            raw="$RUNNER_TEMP/manifest-$(echo "$image" | tr '/:@' '____').json"
+            docker buildx imagetools inspect --raw "$image" > "$raw"
+            jq -e '[.manifests[]?.platform | select(.os == "linux") | .architecture] | index("amd64") != null' "$raw" >/dev/null
+            echo "linux/amd64 manifest ok: $image"
+          done
+
+      - name: Inspect image configuration for credential leakage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          images = [
+              os.environ["AGENTDOCK_IMAGE"],
+              os.environ["AGENTDOCK_BROWSER_IMAGE"],
+              os.environ["AGENTDOCK_DEV_IMAGE"],
+              os.environ["NEXUS_IMAGE"],
+          ]
+          secret_patterns = [
+              re.compile(r"ghp_[A-Za-z0-9]{20,}"),
+              re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+              re.compile(r"PRIVATE_GO_READ_TOKEN="),
+              re.compile(r"PROTOCOL_READ_TOKEN="),
+              re.compile(r"GITHUB_TOKEN="),
+              re.compile(r"machine github\.com login x-access-token password [^%$\s]"),
+          ]
+          forbidden_env_names = {"PRIVATE_GO_READ_TOKEN", "PROTOCOL_READ_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"}
+          for image in images:
+              inspect = json.loads(subprocess.check_output(["docker", "image", "inspect", image], text=True))[0]
+              history = subprocess.check_output(
+                  ["docker", "history", "--no-trunc", "--format", "{{.CreatedBy}}", image],
+                  text=True,
+              )
+              payload = json.dumps(inspect, sort_keys=True) + "\n" + history
+              for pattern in secret_patterns:
+                  if pattern.search(payload):
+                      raise SystemExit(f"credential-like material found in image metadata/history: {image}")
+              env_names = {entry.split("=", 1)[0] for entry in inspect.get("Config", {}).get("Env", [])}
+              leaked_names = sorted(env_names & forbidden_env_names)
+              if leaked_names:
+                  raise SystemExit(f"credential environment names persisted in {image}: {leaked_names}")
+              print(f"credential metadata scan ok: {image}")
+          PY
+
+      - name: Verify image variants start with expected tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm "$AGENTDOCK_IMAGE" agentdock --version
+          docker run --rm --entrypoint sh "$AGENTDOCK_DEV_IMAGE" -c 'go version && node --version && pnpm --version'
+          docker run --rm --entrypoint sh "$AGENTDOCK_BROWSER_IMAGE" -c 'test -x "${AGENTDOCK_BROWSER_EXECUTABLE:-/usr/bin/chromium}" && "${AGENTDOCK_BROWSER_EXECUTABLE:-/usr/bin/chromium}" --version'
+          docker run --rm --entrypoint sh "$NEXUS_IMAGE" -c 'id && test "$(id -u)" = 10001 && test "$(id -g)" = 10001'
+
+      - name: Run paired Bridge and persistence smoke
+        shell: bash
+        run: ./scripts/test/test-private-ghcr-pair.sh

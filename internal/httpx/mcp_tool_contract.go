@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/uvwt/agentdock-protocol/mcpcontract"
+	"github.com/Serialeo/agentdock-protocol/mcpcontract"
 	"github.com/uvwt/nexusdock/internal/agentdock"
 )
 
@@ -47,6 +47,82 @@ type comparableToolContract struct {
 	InputSchema  map[string]any `json:"inputSchema"`
 	OutputSchema map[string]any `json:"outputSchema,omitempty"`
 	Meta         map[string]any `json:"_meta,omitempty"`
+}
+
+func isNexusCentralTool(name string) bool {
+	return mcpcontract.IsCanonicalTool(name)
+}
+
+func fleetToolPresentation(name string) (string, string) {
+	name = strings.TrimSpace(name)
+	return "AgentDock node tool: " + name,
+		"Route the AgentDock tool " + name + " to the node selected by node_id. The target AgentDock validates arguments against its local tool contract."
+}
+
+func sanitizeFleetToolDescriptor(descriptor agentdock.ToolDescriptor) (agentdock.ToolDescriptor, error) {
+	sanitized := descriptor
+	sanitized.Title, sanitized.Description = fleetToolPresentation(sanitized.Name)
+	sanitized.InputSchema = stripSchemaPresentation(sanitized.InputSchema)
+	sanitized.OutputSchema = stripSchemaPresentation(sanitized.OutputSchema)
+	return sanitized, nil
+}
+
+func stripSchemaPresentation(schema map[string]any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	return stripSchemaPresentationObject(schema)
+}
+
+func stripSchemaPresentationObject(schema map[string]any) map[string]any {
+	result := make(map[string]any, len(schema))
+	for key, value := range schema {
+		if key == "title" || key == "description" {
+			continue
+		}
+		result[key] = stripSchemaPresentationValue(key, value)
+	}
+	return result
+}
+
+func stripSchemaPresentationValue(key string, value any) any {
+	switch key {
+	case "properties", "patternProperties", "$defs", "definitions", "dependentSchemas":
+		mapping, ok := value.(map[string]any)
+		if !ok {
+			return value
+		}
+		result := make(map[string]any, len(mapping))
+		for name, child := range mapping {
+			if childSchema, ok := child.(map[string]any); ok {
+				result[name] = stripSchemaPresentationObject(childSchema)
+			} else {
+				result[name] = child
+			}
+		}
+		return result
+	case "items", "contains", "not", "if", "then", "else", "propertyNames", "additionalProperties", "unevaluatedProperties":
+		if childSchema, ok := value.(map[string]any); ok {
+			return stripSchemaPresentationObject(childSchema)
+		}
+		return value
+	case "allOf", "anyOf", "oneOf", "prefixItems":
+		items, ok := value.([]any)
+		if !ok {
+			return value
+		}
+		result := make([]any, len(items))
+		for index, child := range items {
+			if childSchema, ok := child.(map[string]any); ok {
+				result[index] = stripSchemaPresentationObject(childSchema)
+			} else {
+				result[index] = child
+			}
+		}
+		return result
+	default:
+		return value
+	}
 }
 
 func toolContractHash(descriptor agentdock.ToolDescriptor) (string, error) {
@@ -210,36 +286,19 @@ func (s *Server) publishedNodeToolNames() []string {
 	return names
 }
 
-func (s *Server) loadPublishedNodeTools(ctx context.Context) error {
+func (s *Server) resetPersistedNodeToolCatalog(ctx context.Context) error {
 	contracts, err := s.agentDock.ListPublishedToolContracts(ctx)
 	if err != nil {
 		return err
 	}
 	for _, contract := range contracts {
-		if mcpcontract.IsCanonicalTool(contract.ToolName) {
-			// 已提升为 Nexus 中央工具的旧节点契约不再属于 fleet 发布状态，启动时直接清掉持久化残留。
-			if err := s.agentDock.DeletePublishedToolContract(ctx, contract.ToolName); err != nil {
-				return err
-			}
+		name := strings.TrimSpace(contract.ToolName)
+		if name == "" {
 			continue
 		}
-		if strings.TrimSpace(contract.ToolName) == "" {
-			continue
-		}
-		hash, err := toolContractHash(contract.Descriptor)
-		if err != nil {
+		if err := s.agentDock.DeletePublishedToolContract(ctx, name); err != nil {
 			return err
 		}
-		acceptedHashes := normalizeToolContractHashes(contract.AcceptedSemanticHashes)
-		if len(acceptedHashes) == 0 {
-			// 旧版数据库没有 variant 子表数据时，至少保留原来公开 descriptor 对应的真实契约。
-			acceptedHashes = []string{hash}
-		}
-		published := publishedNodeTool{
-			Descriptor: contract.Descriptor, ContractHash: hash, AcceptedSemanticHashes: acceptedHashes,
-		}
-		s.mcpServer.AddTool(nodeMCPToolWithApps(contract.Descriptor, s.mcpAppsEnabled()), s.nodeToolHandler(contract.ToolName))
-		s.mcpTools[contract.ToolName] = published
 	}
 	return nil
 }
@@ -256,7 +315,22 @@ func (s *Server) persistPublishedNodeTool(ctx context.Context, published publish
 
 func (s *Server) reconcileFleetNodeTool(name string) error {
 	name = strings.TrimSpace(name)
-	if name == "" || mcpcontract.IsCanonicalTool(name) {
+	if name == "" || isNexusCentralTool(name) {
+		return nil
+	}
+	if retiredAgentDockToolName(name) {
+		ctx := context.Background()
+		if s.agentDock != nil {
+			if err := s.agentDock.DeletePublishedToolContract(ctx, name); err != nil {
+				return err
+			}
+		}
+		s.mcpToolsMu.Lock()
+		delete(s.mcpTools, name)
+		s.mcpToolsMu.Unlock()
+		if server := s.currentMCPServer(); server != nil {
+			server.RemoveTools(name)
+		}
 		return nil
 	}
 	if s.agentDock == nil {
@@ -274,6 +348,9 @@ func (s *Server) reconcileFleetNodeTool(name string) error {
 	descriptors := make([]agentdock.ToolDescriptor, 0)
 	hasKnownProvider := false
 	for _, node := range nodes {
+		if !nodeUsesCurrentBridgeProtocol(node) {
+			continue
+		}
 		if !containsString(node.Capabilities, name) {
 			continue
 		}
@@ -304,8 +381,8 @@ func (s *Server) reconcileFleetNodeTool(name string) error {
 		if err := s.agentDock.DeletePublishedToolContract(ctx, name); err != nil {
 			return err
 		}
-		if s.mcpServer != nil {
-			s.mcpServer.RemoveTools(name)
+		if server := s.currentMCPServer(); server != nil {
+			server.RemoveTools(name)
 		}
 		delete(s.mcpTools, name)
 		return nil
@@ -316,6 +393,10 @@ func (s *Server) reconcileFleetNodeTool(name string) error {
 		if errors.Is(err, errIncompatibleToolContract) {
 			return nil
 		}
+		return err
+	}
+	descriptor, err = sanitizeFleetToolDescriptor(descriptor)
+	if err != nil {
 		return err
 	}
 	contractHash, err := toolContractHash(descriptor)
@@ -338,10 +419,10 @@ func (s *Server) reconcileFleetNodeTool(name string) error {
 		s.mcpToolsMu.Unlock()
 		return err
 	}
-	if s.mcpServer != nil && descriptorChanged {
-		s.mcpServer.AddTool(nodeMCPToolWithApps(candidate.Descriptor, s.mcpAppsEnabled()), s.nodeToolHandler(name))
-	}
 	s.mcpTools[name] = candidate
+	if server := s.currentMCPServer(); server != nil && descriptorChanged {
+		server.AddTool(nodeMCPToolWithApps(candidate.Descriptor, s.mcpAppsEnabled()), s.nodeToolHandler(name))
+	}
 	s.mcpToolsMu.Unlock()
 	return nil
 }
@@ -382,6 +463,10 @@ func mergeFleetToolDescriptors(descriptors []agentdock.ToolDescriptor) (agentdoc
 	// resource.read provider 由 Hello.ui_resources 独立决定，安全提示仍按 MCP 默认语义保守合并。
 	merged.Meta = mergeFleetToolMeta(descriptors)
 	merged.Annotations = mergeFleetToolAnnotations(descriptors)
+	merged, err = sanitizeFleetToolDescriptor(merged)
+	if err != nil {
+		return agentdock.ToolDescriptor{}, nil, err
+	}
 	return merged, normalizeToolContractHashes(acceptedHashes), nil
 }
 

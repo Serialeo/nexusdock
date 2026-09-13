@@ -1098,7 +1098,7 @@ func workflowMatchRecommendation(candidates []workflowTemplateCandidate) map[str
 		reason = "top candidate score is strong enough to select by default"
 	} else if best >= 60 {
 		recommended = "consider_template"
-		reason = "top candidate is plausible but should be checked against the user goal"
+		reason = "top candidate score is in the consider_template range"
 	}
 	return map[string]any{"recommended": recommended, "recommendation_reason": reason, "best_candidate_score": best, "score_thresholds": map[string]any{"use_template": 85, "consider_template": 60, "plain_task_below": 60}}
 }

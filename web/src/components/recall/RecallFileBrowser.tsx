@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
-import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, Plus, Search, X } from 'lucide-react';
 import type { RecallEntry, RecallWorkspaceViewModel } from './types';
 import { nameOf, normalizePath } from './utils';
@@ -24,11 +23,11 @@ function createFolderNode(name: string, path: string): MutableRecallTreeNode {
 }
 
 function comparePath(a: string, b: string): number {
-  return a.localeCompare(b);
+  return a.localeCompare(b, 'zh-CN');
 }
 
-function buildRecallTree(entries: RecallEntry[], rootName: string): { root: RecallTreeNode; folderCount: number } {
-  const root = createFolderNode(rootName, '');
+function buildRecallTree(entries: RecallEntry[]): { root: RecallTreeNode; folderCount: number } {
+  const root = createFolderNode('召回库', '');
   let folderCount = 0;
 
   for (const entry of entries) {
@@ -96,26 +95,23 @@ function parentFolderPaths(path: string): string[] {
   });
 }
 
-function parentPath(path: string, rootFallback: string): string {
+function parentPath(path: string): string {
   const parts = normalizePath(path).split('/').filter(Boolean);
   parts.pop();
-  return parts.join('/') || rootFallback;
+  return parts.join('/') || '根目录';
 }
 
 export default function RecallFileBrowser({ state, fileEntries, actions }: Props) {
-  const { t } = useTranslation();
   const searchActive = Boolean(state.appliedQuery);
-  const rootName = t('Recall Library');
-  const rootFallback = t('Root directory');
-  const { root, folderCount } = useMemo(() => buildRecallTree(fileEntries, rootName), [fileEntries, rootName]);
+  const { root, folderCount } = useMemo(() => buildRecallTree(fileEntries), [fileEntries]);
   const folderPaths = useMemo(() => collectFolderPaths(root), [root]);
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
   const initializedTree = useRef(false);
   const treeRef = useRef<HTMLDivElement | null>(null);
   const allCollapsed = folderPaths.length > 0 && folderPaths.every((path) => collapsedFolders.has(path));
   const resultSummary = searchActive
-    ? t('“{{query}}” · {{count}} results', { query: state.appliedQuery, count: fileEntries.length })
-    : t('{{folders}} folders / {{files}} files', { folders: folderCount, files: fileEntries.length });
+    ? `“${state.appliedQuery}” · ${fileEntries.length} 个结果`
+    : `${folderCount} 个文件夹 / ${fileEntries.length} 个文件`;
 
   useEffect(() => {
     if (initializedTree.current || searchActive || fileEntries.length === 0) return;
@@ -265,7 +261,7 @@ export default function RecallFileBrowser({ state, fileEntries, actions }: Props
         role="treeitem"
         aria-level={depth + 1}
         aria-expanded={!collapsed}
-        aria-label={t('Folder {{name}}, {{count}} files', { name: folder.name, count: folder.fileCount })}
+        aria-label={`${folder.name} 文件夹，${folder.fileCount} 个文件`}
         title={folder.path}
         onClick={() => toggleFolder(folder.path)}
       >
@@ -282,7 +278,7 @@ export default function RecallFileBrowser({ state, fileEntries, actions }: Props
   }
 
   function renderSearchResults() {
-    return <ul className="recall-search-results" aria-label={t('Search results for “{{query}}”', { query: state.appliedQuery })}>
+    return <ul className="recall-search-results" aria-label={`“${state.appliedQuery}”的搜索结果`}>
       {fileEntries.map((entry) => {
         const active = state.current?.path === entry.path;
         return <li key={entry.path}>
@@ -294,7 +290,7 @@ export default function RecallFileBrowser({ state, fileEntries, actions }: Props
             onClick={() => actions.openRecall(entry.path)}
           >
             <span className="recall-search-result-icon"><FileText size={16} /></span>
-            <span><strong>{nameOf(entry.path)}</strong><small>{parentPath(entry.path, rootFallback)}</small></span>
+            <span><strong>{nameOf(entry.path)}</strong><small>{parentPath(entry.path)}</small></span>
             <ChevronRight size={16} />
           </button>
         </li>;
@@ -307,14 +303,14 @@ export default function RecallFileBrowser({ state, fileEntries, actions }: Props
 
   return <aside className="recall-browser" aria-busy={state.loading}>
     <div className="recall-panel-head recall-browser-head">
-      <div><h2>{t('Recall Entries')}</h2><p aria-live="polite">{resultSummary}</p></div>
-      <button type="button" className="recall-new" onClick={actions.startNew} title={t('New recall entry')}><Plus size={16} /><span>{t('New')}</span></button>
+      <div><h2>召回内容</h2><p aria-live="polite">{resultSummary}</p></div>
+      <button type="button" className="recall-new" onClick={actions.startNew} title="新建召回条目"><Plus size={16} /><span>新建</span></button>
     </div>
     <div className="recall-browser-tools">
       <form
         className="recall-search"
         role="search"
-        aria-label={t('Search recall entries')}
+        aria-label="搜索召回内容"
         onSubmit={(event) => {
           if (initializingLibrary) {
             event.preventDefault();
@@ -325,7 +321,7 @@ export default function RecallFileBrowser({ state, fileEntries, actions }: Props
       >
         <Search size={15} />
         <input
-          aria-label={t('Search recall entries')}
+          aria-label="搜索召回内容"
           value={state.query}
           onChange={(event) => actions.setQuery(event.target.value)}
           onKeyDown={(event) => {
@@ -333,30 +329,30 @@ export default function RecallFileBrowser({ state, fileEntries, actions }: Props
             event.preventDefault();
             actions.clearSearch();
           }}
-          placeholder={t('Search recall entries')}
+          placeholder="搜索召回内容"
         />
         <span className="recall-search-actions">
-          {canClearSearch && <button type="button" className="recall-search-clear" aria-label={t('Clear search')} title={t('Clear search')} disabled={initializingLibrary} onClick={actions.clearSearch}><X size={14} /></button>}
-          <button type="submit" disabled={initializingLibrary} aria-label={state.loading ? t('Rerun search') : t('Run search')}>{state.loading ? t('Searching') : t('Search')}</button>
+          {canClearSearch && <button type="button" className="recall-search-clear" aria-label="清除搜索" title="清除搜索" disabled={initializingLibrary} onClick={actions.clearSearch}><X size={14} /></button>}
+          <button type="submit" disabled={initializingLibrary} aria-label={state.loading ? '重新执行搜索' : '执行搜索'}>{state.loading ? '搜索中' : '搜索'}</button>
         </span>
       </form>
       <div className="recall-tree-toolbar">
-        <span>{searchActive ? <><Search size={14} />{t('Search results')}</> : <><FolderOpen size={14} />{t('Directory')}</>}</span>
+        <span>{searchActive ? <><Search size={14} />搜索结果</> : <><FolderOpen size={14} />目录</>}</span>
         {searchActive
-          ? <small role="status">{t('{{count}} results', { count: fileEntries.length })}</small>
-          : <button type="button" onClick={toggleAllFolders} disabled={folderPaths.length === 0}>{allCollapsed ? t('Expand all') : t('Collapse all')}</button>}
+          ? <small role="status">{fileEntries.length} 个结果</small>
+          : <button type="button" onClick={toggleAllFolders} disabled={folderPaths.length === 0}>{allCollapsed ? '展开全部' : '收起全部'}</button>}
       </div>
     </div>
     <div className="recall-files">
-      {state.loading ? <p className="recall-empty">{t('Loading recall entries…')}</p>
+      {state.loading ? <p className="recall-empty">正在读取召回内容…</p>
         : fileEntries.length === 0 ? <div className="recall-search-empty">
           <Search size={22} />
-          <strong>{searchActive ? t('No matching recall entries') : t('Recall library is empty')}</strong>
-          <span>{searchActive ? t('No files found matching “{{query}}”.', { query: state.appliedQuery }) : t('Create your first recall entry, then browse it here.')}</span>
-          {searchActive && <button type="button" onClick={actions.clearSearch}>{t('View all files')}</button>}
+          <strong>{searchActive ? '没有匹配的召回内容' : '召回库还是空的'}</strong>
+          <span>{searchActive ? `没有找到与“${state.appliedQuery}”匹配的文件。` : '创建第一条召回内容，之后可以在这里浏览。'}</span>
+          {searchActive && <button type="button" onClick={actions.clearSearch}>查看全部文件</button>}
         </div>
         : searchActive ? renderSearchResults()
-          : <div ref={treeRef} className="recall-tree" role="tree" aria-label={t('Recall library file tree')} onKeyDown={handleTreeKeyDown}><div className="recall-tree-root">
+          : <div ref={treeRef} className="recall-tree" role="tree" aria-label="召回库文件树" onKeyDown={handleTreeKeyDown}><div className="recall-tree-root">
             {root.folders.map((folder) => renderFolder(folder, 0))}
             {renderFiles(root.files, 0)}
           </div></div>}

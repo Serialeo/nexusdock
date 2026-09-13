@@ -2,7 +2,9 @@
 
 ## 产品边界
 
-NexusDock 是个人多设备 AgentDock 汇总入口。一级产品区域保持为总览、Recall、Runtime 和设置；Runtime 与节点工具必须显式选择 AgentDock 节点，Recall 等 Nexus 自有工具只公开一次。节点通过 Device Token 主动建立出站 WebSocket，不要求 AgentDock 具备公网入口。不要恢复独立 Task、Run、Skill Registry、任意权限 scope、SSE/EventBus、旧单节点 Runtime 路由或 Nexus 主动回连 AgentDock 的拓扑。
+NexusDock 是个人多设备 AgentDock 汇总与 Project 工作入口。一级产品区域按当前主线组织为“工作（Projects / Sessions）”“知识（Recall / Workflow）”“运行环境（Nodes / Skills / MCP）”“系统（设置与账号）”；节点管理页可以显式选择单个 AgentDock，但 Project 工作流必须通过服务端绑定的 WorkSession / Target 路由到 Deployment，不能把前端全局 Node 选择器当作执行授权。Recall 等 Nexus 自有工具只公开一次。节点通过 Device Token 主动建立出站 WebSocket，不要求 AgentDock 具备公网入口。
+
+Project / Deployment / Target 与 `docs/project-workspace-refactor/` 的 D01–D11 是当前产品基线：不恢复 Global Instructions、Node Guidance、Direct Instructions 或 Node FileAccess 作为项目工作指导/权限来源；不引入 legacy Host Project、`project://`、External Resources、`validation_scope` 或目录 ACL DSL。`working_folder` 是**可选**的默认 cwd、Project Prompt 搜索边界与源码 provenance 根，不是 OS 沙箱；留空时使用 Node AgentDock 默认 cwd 且不自动发现 Project `AGENTS.md`。Node 的 Full Access 与 `working_folder` 正交：开启后覆盖 Deployment 细粒度执行能力，但不扩大 Project Prompt 搜索边界，真实访问仍受 Node OS 身份权限约束。硬能力必须由 Nexus 与 AgentDock 的运行时检查执行。此次断代**不兼容旧代码路径、旧协议请求或旧 UI 行为**：旧入口应删除或明确报错，不得 fallback、自动翻译或维护双轨；数据库迁移只负责结构一致性与保留 Recall、秘密、节点身份等无关数据。不要恢复独立 Task / Run 业务系统、Skill Registry、任意权限 scope、SSE/EventBus、旧无 Target 的单节点 Runtime fallback 或 Nexus 主动回连 AgentDock 的拓扑。
 
 ## 代码原则
 

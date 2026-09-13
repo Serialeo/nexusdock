@@ -22,10 +22,11 @@ const (
 )
 
 type Config struct {
-	Endpoint string
-	Model    string
-	APIKey   string
-	Timeout  time.Duration
+	Endpoint     string
+	Model        string
+	APIKey       string
+	Timeout      time.Duration
+	SystemPrompt string
 }
 
 type Snapshot struct {
@@ -107,6 +108,12 @@ func NewClient(cfg Config) (*Client, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 60 * time.Second
 	}
+	if strings.TrimSpace(cfg.SystemPrompt) == "" {
+		cfg.SystemPrompt = BundledDefaultPrompt()
+	}
+	if !utf8.ValidString(cfg.SystemPrompt) || len([]byte(cfg.SystemPrompt)) > MaxSystemPromptBytes {
+		return nil, errors.New("Stage 3 system prompt must be valid UTF-8 and at most 64 KiB")
+	}
 	return &Client{cfg: cfg, client: &http.Client{
 		Timeout:       cfg.Timeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
@@ -125,7 +132,7 @@ func (c *Client) Generate(ctx context.Context, snapshot Snapshot) (Output, error
 	payload := map[string]any{
 		"model": c.cfg.Model,
 		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
+			{"role": "system", "content": c.cfg.SystemPrompt},
 			{"role": "user", "content": string(data)},
 		},
 		"temperature":     0,
@@ -215,13 +222,6 @@ func (c *Client) chatCompletion(ctx context.Context, payload map[string]any) (st
 	}
 	return envelope.Choices[0].Message.Content, nil
 }
-
-const systemPrompt = `You are the low-frequency semantic assistant for AgentDock Stage 3 evolution.
-Analyze only the supplied redacted structured facts. Find durable missed learnings, cross-task patterns, conflicts, duplicate knowledge, and reusable workflow/skill candidates.
-Return one JSON object: {"candidates":[...]}. Candidate fields are: type, statement, scope, project, device, canonical_key, tags, evidence_refs, related_evolution_id, relation, rationale.
-Allowed types: preference, user_preference, decision, explicit_decision, constraint, runbook, bug_pattern, deploy_note, project_trap, architecture, anti_pattern, operational_lesson, technical_fact, workflow_template, skill.
-relation, when present, is only a semantic suggestion: duplicate, supersedes, conflicts, or related.
-Never output lifecycle status, maturity, verified, support_count, contradict_count, next_state, or policy decisions. Never invent evidence refs. Never reconstruct secrets or hidden prompts. Prefer no candidate over a weak candidate.`
 
 var (
 	secretAssignmentPattern = regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret|cookie|private[_-]?key)\s*[:=]\s*([^\s,;]+)`)

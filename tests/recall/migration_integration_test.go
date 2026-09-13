@@ -2,15 +2,18 @@ package recall_test
 
 import (
 	"context"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	recall "github.com/uvwt/nexusdock/internal/recall"
+	"github.com/uvwt/nexusdock/internal/versioning"
 )
 
-func TestLegacyRepositoryMigrationIsLosslessAndUpdatable(t *testing.T) {
+func TestLegacyRepositoryMigrationIsLosslessAndGitDiffVisible(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "legacy")
 	target := filepath.Join(t.TempDir(), "nexus")
 	if err := os.MkdirAll(filepath.Join(source, "projects", "agentdock", "runbooks"), 0o755); err != nil {
@@ -60,6 +63,11 @@ func TestLegacyRepositoryMigrationIsLosslessAndUpdatable(t *testing.T) {
 		t.Fatalf("context index regressed: %#v err=%v", index, err)
 	}
 
+	runGit(t, target, "init", "-b", "main")
+	runGit(t, target, "config", "user.email", "nexus@example.invalid")
+	runGit(t, target, "config", "user.name", "Nexus Test")
+	runGit(t, target, "add", ".")
+	runGit(t, target, "commit", "-m", "recall import")
 	proposal, err := svc.ProposeUpdate(context.Background(), recall.ProposeUpdateRequest{Path: "recall/docs/projects/agentdock/project.md", Content: "# AgentDock\nupdated", Scope: recall.ScopeProject, Status: recall.StatusActive, Project: "agentdock", Source: "user_edit", Confidence: recall.ConfidenceHigh})
 	if err != nil {
 		t.Fatal(err)
@@ -67,9 +75,19 @@ func TestLegacyRepositoryMigrationIsLosslessAndUpdatable(t *testing.T) {
 	if _, err := svc.ApplyUpdate(context.Background(), recall.ApplyUpdateRequest{Proposal: proposal, Approved: true}); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := store.Read("recall/docs/projects/agentdock/project.md")
-	if err != nil || !strings.Contains(updated.Content, "updated") {
-		t.Fatalf("updated recall missing: %#v err=%v", updated, err)
+	manager := versioning.NewManager(target, slog.Default())
+	diff, err := manager.Diff(context.Background())
+	if err != nil || !diff.Dirty || !strings.Contains(diff.Diff, "updated") {
+		t.Fatalf("git diff missing: %#v err=%v", diff, err)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 }
 

@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
+	protocol "github.com/Serialeo/agentdock-protocol"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	protocol "github.com/uvwt/agentdock-protocol"
 	"github.com/uvwt/nexusdock/internal/agentdock"
 	"github.com/uvwt/nexusdock/internal/config"
 )

@@ -41,6 +41,7 @@ type Node struct {
 	DeviceID         string     `json:"device_id"`
 	Name             string     `json:"name"`
 	Enabled          bool       `json:"enabled"`
+	FullAccess       bool       `json:"full_access"`
 	Version          string     `json:"version,omitempty"`
 	ProtocolVersion  string     `json:"protocol_version,omitempty"`
 	OS               string     `json:"os,omitempty"`
@@ -65,8 +66,9 @@ type PairInput struct {
 }
 
 type UpdateInput struct {
-	Name    *string `json:"name,omitempty"`
-	Enabled *bool   `json:"enabled,omitempty"`
+	Name       *string `json:"name,omitempty"`
+	Enabled    *bool   `json:"enabled,omitempty"`
+	FullAccess *bool   `json:"full_access,omitempty"`
 }
 
 type Store struct {
@@ -82,7 +84,7 @@ func NewStore(db *sql.DB) (*Store, error) {
 }
 
 func (s *Store) List(ctx context.Context) ([]Node, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, device_id, name, enabled, version, protocol_version,
+	rows, err := s.db.QueryContext(ctx, `SELECT id, device_id, name, enabled, full_access, version, protocol_version,
 		os, arch, capabilities_json, tool_contract_hash, last_seen_at, created_at, updated_at
 		FROM agentdock_devices ORDER BY name COLLATE NOCASE, id`)
 	if err != nil {
@@ -109,7 +111,7 @@ func (s *Store) Get(ctx context.Context, id string) (Node, error) {
 	if id == "" {
 		return Node{}, invalid("节点 ID 不能为空")
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT id, device_id, name, enabled, version, protocol_version,
+	row := s.db.QueryRowContext(ctx, `SELECT id, device_id, name, enabled, full_access, version, protocol_version,
 		os, arch, capabilities_json, tool_contract_hash, last_seen_at, created_at, updated_at
 		FROM agentdock_devices WHERE id = ?`, id)
 	node, err := scanNode(row)
@@ -190,7 +192,7 @@ func (s *Store) Pair(ctx context.Context, input PairInput) (Node, error) {
 }
 
 func (s *Store) Update(ctx context.Context, id string, input UpdateInput) (Node, error) {
-	if input.Name == nil && input.Enabled == nil {
+	if input.Name == nil && input.Enabled == nil && input.FullAccess == nil {
 		return Node{}, invalid("至少提交一个需要更新的节点字段")
 	}
 	node, err := s.Get(ctx, id)
@@ -207,13 +209,20 @@ func (s *Store) Update(ctx context.Context, id string, input UpdateInput) (Node,
 	if input.Enabled != nil {
 		node.Enabled = *input.Enabled
 	}
+	if input.FullAccess != nil {
+		node.FullAccess = *input.FullAccess
+	}
 	node.UpdatedAt = s.now().UTC()
 	enabled := 0
 	if node.Enabled {
 		enabled = 1
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE agentdock_devices SET name = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		node.Name, enabled, node.UpdatedAt.Format(time.RFC3339Nano), node.ID)
+	fullAccess := 0
+	if node.FullAccess {
+		fullAccess = 1
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE agentdock_devices SET name = ?, enabled = ?, full_access = ?, updated_at = ? WHERE id = ?`,
+		node.Name, enabled, fullAccess, node.UpdatedAt.Format(time.RFC3339Nano), node.ID)
 	if err != nil {
 		return Node{}, fmt.Errorf("更新 AgentDock 节点: %w", err)
 	}
@@ -388,10 +397,10 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 
 func scanNode(scanner interface{ Scan(...any) error }) (Node, error) {
 	var node Node
-	var enabled int
+	var enabled, fullAccess int
 	var capabilitiesJSON, createdAt, updatedAt string
 	var lastSeen sql.NullString
-	if err := scanner.Scan(&node.ID, &node.DeviceID, &node.Name, &enabled, &node.Version, &node.ProtocolVersion,
+	if err := scanner.Scan(&node.ID, &node.DeviceID, &node.Name, &enabled, &fullAccess, &node.Version, &node.ProtocolVersion,
 		&node.OS, &node.Arch, &capabilitiesJSON, &node.ToolContractHash, &lastSeen, &createdAt, &updatedAt); err != nil {
 		return Node{}, err
 	}
@@ -413,12 +422,13 @@ func scanNode(scanner interface{ Scan(...any) error }) (Node, error) {
 		node.LastSeenAt = &value
 	}
 	node.Enabled = enabled == 1
+	node.FullAccess = fullAccess == 1
 	return node, nil
 }
 
 func validateUIResources(values []UIResourceCapability) ([]UIResourceCapability, error) {
 	if values == nil {
-		return nil, invalid("AgentDock Bridge v2 握手必须声明 ui_resources")
+		return nil, invalid("AgentDock Bridge v4 握手必须声明 ui_resources")
 	}
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {

@@ -1,15 +1,14 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
 
-export default function Dialog({ title, description, children, onClose, wide = false }: {
+export default function Dialog({ title, description, children, onClose, wide = false, closeDisabled = false }: {
   title: string;
   description?: string;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  closeDisabled?: boolean;
 }) {
-  const { t } = useTranslation();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -23,7 +22,9 @@ export default function Dialog({ title, description, children, onClose, wide = f
       '[data-dialog-initial-focus], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), button:not(:disabled):not(.nx-icon-button)',
     );
     initialFocus?.focus();
+    document.body.classList.add('nexus-modal-open');
     return () => {
+      document.body.classList.remove('nexus-modal-open');
       previous?.focus();
     };
   }, []);
@@ -34,12 +35,12 @@ export default function Dialog({ title, description, children, onClose, wide = f
       className="nx-dialog-backdrop"
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
-      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      onCancel={(event) => { event.preventDefault(); if (!closeDisabled) onClose(); }}
     >
       <div ref={panelRef} className={`nx-dialog ${wide ? 'is-wide' : ''}`}>
         <header>
           <div><h2 id={titleId}>{title}</h2>{description && <p id={descriptionId}>{description}</p>}</div>
-          <button type="button" className="nx-icon-button" aria-label={t('Close')} onClick={onClose}><X size={19} /></button>
+          <button type="button" className="nx-icon-button" aria-label="关闭" disabled={closeDisabled} onClick={() => { if (!closeDisabled) onClose(); }}><X size={19} /></button>
         </header>
         <div className="nx-dialog-body">{children}</div>
       </div>

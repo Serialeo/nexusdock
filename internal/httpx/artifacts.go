@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	protocol "github.com/uvwt/agentdock-protocol"
+	protocol "github.com/Serialeo/agentdock-protocol"
 	"github.com/uvwt/nexusdock/internal/agentdock"
 )
 

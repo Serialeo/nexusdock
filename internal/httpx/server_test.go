@@ -16,6 +16,7 @@ import (
 	"github.com/uvwt/nexusdock/internal/core"
 	"github.com/uvwt/nexusdock/internal/privatenotes"
 	"github.com/uvwt/nexusdock/internal/recall"
+	"github.com/uvwt/nexusdock/internal/versioning"
 )
 
 func newTestHandler(t *testing.T, cfg config.Config) http.Handler {
@@ -36,11 +37,12 @@ func newTestHandler(t *testing.T, cfg config.Config) http.Handler {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	mgr := versioning.NewManager(store.Root(), slog.Default())
 	privateNotes, err := privatenotes.New(filepath.Join(store.Root(), "private-notes"))
 	if err != nil {
 		t.Fatalf("New private notes store: %v", err)
 	}
-	handler := NewServer(cfg, store, slog.Default(), WithSystemDatabase(db), WithAgentDockNodes(nodes), WithPrivateNotes(privateNotes)).Handler()
+	handler := NewServer(cfg, store, mgr, slog.Default(), WithSystemDatabase(db), WithAgentDockNodes(nodes), WithPrivateNotes(privateNotes)).Handler()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr = "127.0.0.1:51234"
 		handler.ServeHTTP(w, r)
@@ -364,6 +366,7 @@ func TestRuntimeRoutesRequireExplicitNodeID(t *testing.T) {
 
 	for _, path := range []string{
 		"/v1/runtime/nodes/dockmini/tasks",
+		"/v1/runtime/nodes/dockmini/files",
 		"/v1/runtime/nodes/dockmini/skills",
 		"/v1/runtime/nodes/dockmini/mcp",
 		"/v1/runtime/nodes/dockmini/overview",
@@ -378,7 +381,7 @@ func TestRuntimeRoutesRequireExplicitNodeID(t *testing.T) {
 
 func TestRetiredRoutesAreNotRegistered(t *testing.T) {
 	h := newTestHandler(t, config.Config{})
-	for _, path := range []string{"/v1/schedules", "/v1/backup/status"} {
+	for _, path := range []string{"/v1/schedules", "/v1/backup/status", "/v1/runtime/nodes/dockmini/file-access", "/v1/runtime/nodes/dockmini/instructions", "/v1/settings/instructions"} {
 		t.Run(path, func(t *testing.T) {
 			res := httptest.NewRecorder()
 			h.ServeHTTP(res, httptest.NewRequest(http.MethodGet, path, nil))
@@ -399,10 +402,26 @@ func TestRecallRemoteSyncRoutesAreRemoved(t *testing.T) {
 		{http.MethodPost, "/v1/sync/pull"},
 		{http.MethodPost, "/v1/sync/push"},
 		{http.MethodPost, "/v1/sync/now"},
+		{http.MethodPost, "/v1/git/discard"},
 	} {
 		res := doJSON(t, h, tc.method, tc.path, `{}`)
 		if res.Code != http.StatusNotFound && res.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("legacy route %s %s status=%d body=%s", tc.method, tc.path, res.Code, res.Body.String())
 		}
+	}
+}
+
+func TestRecordLocalVersionRouteIsAvailable(t *testing.T) {
+	h := newTestHandler(t, config.Config{})
+	res := doJSON(t, h, http.MethodPost, "/v1/git/commit", `{}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("record version status=%d body=%s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ok"] != true || body["git_repo"] != false || body["created"] != false {
+		t.Fatalf("record version body=%#v", body)
 	}
 }

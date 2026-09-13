@@ -2,13 +2,15 @@ package httpx
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
 
-	"github.com/uvwt/agentdock-protocol/mcpcontract"
+	"github.com/Serialeo/agentdock-protocol/mcpcontract"
 	"github.com/uvwt/nexusdock/internal/config"
 	"github.com/uvwt/nexusdock/internal/recall"
+	"github.com/uvwt/nexusdock/internal/versioning"
 )
 
 func newRecallToolTestServer(t *testing.T) (*Server, *recall.Store) {
@@ -17,7 +19,8 @@ func newRecallToolTestServer(t *testing.T) (*Server, *recall.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Server{store: store}, store
+	manager := versioning.NewManager(store.Root(), slog.Default())
+	return &Server{store: store, versions: manager}, store
 }
 
 func TestRecallWriteMatchesCanonicalBehaviorCases(t *testing.T) {

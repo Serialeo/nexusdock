@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	protocol "github.com/Serialeo/agentdock-protocol"
 	"github.com/gorilla/websocket"
-	protocol "github.com/uvwt/agentdock-protocol"
 )
 
 func TestHubInvokesConnectedNode(t *testing.T) {
@@ -141,11 +141,52 @@ func TestHubRejectsStructurallyInvalidBridgeV2UIResourceHandshake(t *testing.T) 
 					t.Fatalf("accept error = %#v, want ValidationError", err)
 				}
 			case <-time.After(time.Second):
-				t.Fatal("Accept did not reject invalid Bridge v2 handshake")
+				t.Fatal("Accept did not reject invalid Bridge v4 handshake")
 			}
 			if hub.Online(node.ID) {
-				t.Fatal("invalid Bridge v2 handshake marked node online")
+				t.Fatal("invalid Bridge v4 handshake marked node online")
 			}
 		})
+	}
+}
+
+func TestHubRejectsPreviousBridgeProtocolGeneration(t *testing.T) {
+	store, _ := newTestStore(t)
+	pairing, err := store.CreatePairingCode(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.Pair(t.Context(), PairInput{Code: pairing.Code, DeviceID: "device_previous_protocol", Name: "OldBridge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := NewHub(store)
+	acceptErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		acceptErr <- hub.Accept(w, r, node.ID)
+	}))
+	defer server.Close()
+
+	socket, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.Close()
+	if err := socket.WriteJSON(connectionMessage{
+		Type: protocol.MessageNodeHello, ProtocolVersion: "3",
+		Hello: &Hello{DeviceID: node.DeviceID, ProtocolVersion: "3", UIResources: []UIResourceCapability{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-acceptErr:
+		if err == nil {
+			t.Fatal("Bridge v3 handshake was accepted by Bridge v4 Nexus")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Bridge v3 handshake was not rejected promptly")
+	}
+	if hub.Online(node.ID) {
+		t.Fatal("Bridge v3 node was marked online")
 	}
 }

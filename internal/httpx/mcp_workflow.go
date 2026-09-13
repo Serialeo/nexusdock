@@ -9,8 +9,6 @@ import (
 	"strings"
 )
 
-const workflowCompositionNextAction = "Combine these templates for the current user goal: prune irrelevant steps, deduplicate, order the remaining steps, and merge completion conditions. Then call task_manage create with source_template_ids, composed steps, and completion_conditions."
-
 func (s *Server) callWorkflowTemplateManage(ctx context.Context, args map[string]any) (map[string]any, error) {
 	action := strings.ToLower(stringArgument(args, "action"))
 	switch action {
@@ -90,8 +88,8 @@ func (s *Server) callWorkflowTemplateManage(ctx context.Context, args map[string
 		}
 		return map[string]any{
 			"ok": true, "action": action, "templates": templates, "count": len(templates),
-			"composition_required": true, "next_required_action": workflowCompositionNextAction,
-			"source": "nexus-registry",
+			"composition_required": true,
+			"source":               "nexus-registry",
 		}, nil
 
 	case "list":

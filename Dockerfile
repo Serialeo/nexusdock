@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM node:26-alpine AS web-builder
 WORKDIR /src/web
 COPY web/package*.json ./
@@ -7,9 +9,20 @@ COPY internal/httpx/web_dist ../internal/httpx/web_dist
 RUN npm run build
 
 FROM golang:1.26-alpine AS go-builder
+ENV GOPRIVATE=github.com/Serialeo/* \
+    GONOSUMDB=github.com/Serialeo/*
+RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=secret,id=github_token,required=true \
+    set -eu; \
+    private_home="$(mktemp -d)"; \
+    trap 'rm -rf "$private_home"' EXIT; \
+    token="$(cat /run/secrets/github_token)"; \
+    test -n "$token"; \
+    printf 'machine github.com login x-access-token password %s\n' "$token" > "$private_home/.netrc"; \
+    chmod 0600 "$private_home/.netrc"; \
+    HOME="$private_home" go mod download
 COPY . .
 COPY --from=web-builder /src/internal/httpx/web_dist ./internal/httpx/web_dist
 RUN go build -o /out/nexusdock ./cmd/nexusdock

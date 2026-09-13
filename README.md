@@ -4,16 +4,15 @@
 
 如果你在多台 Mac、Windows 或服务器上使用 AgentDock，可以用 NexusDock 提供一个统一的 Web 控制台和 MCP 入口，集中管理设备、Recall、Workflow 与常用运行时能力。
 
-- AgentDock：<https://github.com/uvwt/agentdock>
-- Docker Hub：<https://hub.docker.com/r/agentdockio/nexusdock>
-- GitHub Container Registry：<https://github.com/uvwt/nexusdock/pkgs/container/nexusdock>
-- Releases：<https://github.com/uvwt/nexusdock/releases>
+- AgentDock 私有主线：<https://github.com/Serialeo/agentdock>
+- GitHub Container Registry：<https://github.com/Serialeo/nexusdock/pkgs/container/nexusdock>
+- 私有 Releases：<https://github.com/Serialeo/nexusdock/releases>
 
 ## 能做什么
 
 - **管理多台 AgentDock**：查看在线状态、版本和能力，完成设备配对、重命名、停用或移除。
 - **查看设备运行时**：选择具体节点后查看它的任务、Skill 和动态 MCP；这些状态仍保留在 AgentDock 本机。
-- **集中使用 Recall 与 Workflow**：管理长期记忆、经验卡片和可复用工作流模板。
+- **集中使用 Recall 与 Workflow**：管理长期记忆、经验卡片、版本历史和可复用工作流模板。
 - **提供统一 MCP 入口**：支持 OAuth，也可以为不支持 OAuth 的客户端使用独立 MCP Access Token。
 - **集中配置 AI 与向量能力**：在 Web 中配置 Embedding 和可选模型，并用于 Recall 与 Workflow 的语义能力。
 
@@ -21,16 +20,22 @@ NexusDock 不替代 AgentDock。命令执行、文件操作、浏览器、Skill�
 
 ## 快速开始
 
-普通部署直接使用官方 Docker 镜像即可，不需要安装 Go 或 Node.js。
+普通部署直接使用 Serialeo 私有 GHCR 镜像即可，不需要安装 Go 或 Node.js。
 
-官方镜像发布到：
+私有主线只发布到：
 
 ```text
-agentdockio/nexusdock
-ghcr.io/uvwt/nexusdock
+ghcr.io/serialeo/nexusdock
 ```
 
-镜像支持 `linux/amd64` 和 `linux/arm64`。下面示例使用 `latest`；如果希望固定版本，将它替换为 [Releases](https://github.com/uvwt/nexusdock/releases) 中对应的发布版本。
+镜像仅发布 `linux/amd64`。下面示例为了简洁使用 `latest`；生产环境优先使用 [Serialeo 私有 Releases](https://github.com/Serialeo/nexusdock/releases) 对应的固定 release tag，关键部署可进一步固定 image digest。AgentDock 与 NexusDock 应按同一 release manifest 中验证过的 Bridge generation 成对升级。
+
+私有 GHCR 拉取前先登录。按照 GitHub 当前规则，命令行拉取私有 package 可使用带 `read:packages` 的 personal access token (classic)，同时登录账号需要拥有 package 的读取权限。Token 不要写入 Compose 文件，也不要提交到 Git。
+
+```bash
+export CR_PAT='<read:packages token>'
+echo "$CR_PAT" | docker login ghcr.io -u '<github-username>' --password-stdin
+```
 
 ### 1. 创建目录
 
@@ -72,7 +77,7 @@ NEXUS_TRUSTED_PROXIES=127.0.0.1,::1
 ```yaml
 services:
   nexusdock:
-    image: agentdockio/nexusdock:latest
+    image: ghcr.io/serialeo/nexusdock:latest
     container_name: nexusdock
     restart: unless-stopped
     read_only: true
@@ -98,12 +103,6 @@ services:
       NEXUS_LOG_LEVEL: ${NEXUS_LOG_LEVEL:-info}
 ```
 
-如果使用 GHCR，将镜像改为：
-
-```yaml
-image: ghcr.io/uvwt/nexusdock:latest
-```
-
 ### 4. 创建管理员
 
 ```bash
@@ -115,6 +114,7 @@ docker compose run --rm nexusdock admin init myadmin
 ### 5. 启动
 
 ```bash
+docker compose pull
 docker compose up -d
 curl http://127.0.0.1:18777/health
 ```
@@ -161,13 +161,25 @@ agentdock nexus pair --endpoint https://nexus.example.com --code pair_xxx
 
 ## Web 控制台
 
-登录后主要有三类区域：
+登录后的主线按 Project-first 组织：
 
-- **Workspace**：总览、Recall、Workflow。用于查看整体状态、管理长期记忆和工作流模板。
-- **Runtime**：任务、Skill、MCP。先选择具体 AgentDock 节点，再查看该节点的实时运行状态。
-- **Settings**：账号与会话、MCP 接入、AI 与向量、系统与节点。
+- **工作**：Projects / Sessions。Project 关联一个或多个 Node Deployment；Session 展示本次工作实际绑定的 Target、cwd、上下文 revision 与执行状态。
+- **知识**：Recall / Workflow。用于管理长期记忆与可复用工作流模板。
+- **运行环境**：Nodes / Skills / MCP。节点页用于设备与运行环境管理，不作为 Project 执行授权的全局选择器。
+- **系统**：账号、MCP 接入、AI 与向量等设置。
 
-Runtime 展示的是目标 AgentDock 的实时状态，不是 NexusDock 复制出来的另一套任务或 Skill 数据。
+### Project 工作上下文与权限
+
+每个 Deployment 固定绑定目标 Node，并可选保存 `working_folder`、自由文本 `role` / `purpose` 和细粒度能力。`working_folder` 只负责默认 cwd、Project Prompt 搜索边界与源码 provenance 根，不是 OS 沙箱；它可以留空，留空时 Target 的相对路径/默认命令目录从该 Node 的 AgentDock 默认目录开始，同时不自动发现任何 Project `AGENTS.md`。
+
+Node 管理页提供独立的 **Full Access** 开关。开启后，该 Node 的 Project Target 可使用节点已经暴露的全部执行能力，仍受 AgentDock 服务进程真实 OS 权限约束；Full Access 与 Project Folder 正交，不会把文件/命令限制在 `working_folder` 内，也不会扩大 Project Prompt 的自动发现范围。关闭 Full Access 后，执行回到各 Deployment 保存的 files / shell / browser / dynamic MCP / ACP 细粒度权限。
+
+Project Prompt 只在 Deployment 配置了 Project Folder 时来自该目录内当前适用的 `AGENTS.md` 链。外部 MCP Host 通过 `project_open` / `project_context` 获取模型可见的完整 Project Context，包括 Target、revision、协作策略、来源与规则正文；NexusDock 不创建第二套 AI 会话，也不把返回结果宣称为替换了 Host 的 system prompt。
+
+旧 **Global Instructions / Node Guidance / Direct Instructions / Node FileAccess** 已从当前产品边界移除。对应管理路由不再注册，旧 prompt 数据不会自动迁移到 `AGENTS.md` 或 Project；升级时只清理这些 legacy 表/状态，并保留 Node identity、Project、Recall、秘密与其他无关数据。Stage 3 的独立 System Prompt 仍属于 AI 设置，不是 Project 指导来源。
+
+Runtime → Skills 中，已安装的 `agentdock-api` Skill 可以管理激活版本、回滚和隔离环境变量；Common Skills 保持只读且与已安装同名时由 AgentDock 在索引层直接 shadow。环境 API 只返回变量名和 configured 状态，不回显值。
+
 
 ## 连接 MCP 客户端
 
@@ -197,19 +209,21 @@ NexusDock 中常见的三类凭据用途不同：
 
 ## Recall、Workflow 与 AI
 
-Recall 是 NexusDock 的长期记忆工作区，可以在 Web 中浏览、搜索和编辑内容。
+Recall 是 NexusDock 的长期记忆工作区，可以在 Web 中浏览、搜索和编辑内容，也可以查看本地 Git 版本历史。NexusDock 不会自动配置或操作 Recall 仓库的 Git remote，远端备份方式由你自己决定。
 
 Workflow 用于集中保存和匹配可复用任务模板。即使没有配置 Embedding，也可以正常使用基本模板能力。
 
 需要语义召回或语义匹配时，进入 **设置 → AI 与向量** 配置兼容的 Embedding 服务；如有需要，也可以配置可选的外部模型。Web 中可以测试连接和重建索引，保存后的配置会直接应用，无需重启容器。
 
-不配置 AI 或 Embedding 时，NexusDock 的节点管理、MCP、Recall 文件浏览、关键词搜索和基础 Workflow 仍然可以使用。
+Stage 3 的 System Prompt 也在该页面完整可见。默认内容来自随当前 NexusDock 版本交付的 bundled resource；编辑并保存后来源显示为 **Custom**，点击 **恢复 Bundled Default** 会删除自定义覆盖并重新使用当前版本的 bundled default。实际发送给 Stage 3 模型的 system message 就是页面展示的 effective prompt。多节点或无唯一 evidence 来源的候选可以显式选择一个 `review_node_id`；未配置时这类候选不会派发，未知 device 也不会回退到第一台节点。候选引用只有在唯一属于目标节点时才作为 AgentDock evidence 传递，其他有效引用只留在 Nexus 的 proposal audit 中作为非权威 provenance。
 
-## 节点文件下载
+不配置 AI 或 Embedding 时，NexusDock 的节点管理、MCP、Recall 文件浏览、关键词搜索、版本历史和基础 Workflow 仍然可以使用。
 
-AgentDock 工具产生可发布文件时，NexusDock 可以通过节点现有连接提供临时下载地址，不要求节点额外开放公网文件服务。
+## 工具媒体与 Artifact
 
-要生成可从外部访问的下载地址，需要正确设置 `NEXUS_PUBLIC_URL`；下载期间对应 AgentDock 节点需要在线。NexusDock 不会把这些节点文件长期保存为自己的文件副本。
+通用 `file_publish` 已移除；NexusDock 不再提供把任意本地文件或目录发布成下载地址的模型工具。Browser screenshot、`view_image` 等工具产生的必要媒体仍可沿现有 Artifact/Bridge 通道返回，这与任意文件发布是不同边界。
+
+当保留的媒体需要临时外部访问地址时，应正确设置 `NEXUS_PUBLIC_URL`；相关 Node 可能需要保持在线。旧 Artifact URL 的失效策略属于独立媒体安全边界，不能因为 `file_publish` 已删除就推断所有历史 URL 都自动失效。
 
 ## 升级与备份
 
@@ -220,7 +234,7 @@ nexus-data/
 recall/
 ```
 
-不要只备份 SQLite 数据库或单个密钥文件。`nexus-data` 中还包含账号、设备、会话和 NexusDock 自身需要的密钥；`recall` 中包含长期记忆。
+不要只备份 SQLite 数据库或单个密钥文件。`nexus-data` 中还包含账号、设备、会话和 NexusDock 自身需要的密钥；`recall` 中包含长期记忆和本地版本历史。
 
 升级：
 
@@ -230,9 +244,11 @@ docker compose up -d
 curl http://127.0.0.1:18777/health
 ```
 
-如果使用固定版本，先把 `image:` 调整到目标发布版本。需要回滚时，改回之前验证过的版本并重新执行 `pull` / `up -d`。
+如果使用固定版本，先把 `image:` 调整到同一 release manifest 验证过的版本对。Project-first 源码使用 **Bridge v4**（`ConnectionProtocolVersion = "4"`），与 Bridge v3 及更早 wire 不兼容；AgentDock 与 NexusDock 必须同时使用包含同一 Bridge v4 契约的 `agentdock-protocol` release。Bridge v4 protocol tag 尚未发布、两仓 `go.mod` 尚未更新到该 tag 时，源码只能通过本地多仓 workspace 联调，**不能**把这种状态当作可发布版本对。升级到 Project-first 版本时会删除旧 Global/Node Instructions 表，而不会迁移其中正文；稳定 Node identity、Project/Deployment/WorkSession、Recall、秘密与其他无关状态继续保留。
 
-不要运行两个 NexusDock 实例同时写同一份 `nexus-data`。
+不支持只回滚 AgentDock 或只回滚 NexusDock 到旧 Bridge generation。需要跨 v4 边界回滚时，应同时回滚 A/N，并优先使用升级前的 `nexus-data` 备份恢复控制面数据；不要依赖新版数据库继续为旧运行时代际提供协议兼容。Bridge v4 启动时不会恢复上一 generation 的持久 node-tool 发布缓存，当前节点重新完成 v4 Hello 后会按新契约重建。
+
+不要运行两个 NexusDock 实例同时写同一份 `nexus-data`；当前配置 revision/mutex 设计只承诺单 writer 进程，不宣称多个 NexusDock 进程共享同一 SQLite 时有跨进程顺序保证。
 
 ## 常用配置
 
@@ -309,11 +325,20 @@ curl http://127.0.0.1:18777/health
 这一部分只面向希望修改 NexusDock 本身的开发者。普通部署不需要执行这些步骤。
 
 ```bash
-git clone https://github.com/uvwt/nexusdock.git
+git clone https://github.com/Serialeo/nexusdock.git
 cd nexusdock
 make web-deps
 make build
 ```
+
+源码构建依赖私有 `github.com/Serialeo/agentdock-protocol` module。为 Git/Go 配置一个仅能读取 `Serialeo/agentdock-protocol`、`Contents: Read` 的最小权限机器凭据，并设置：
+
+```bash
+export GOPRIVATE='github.com/Serialeo/*'
+export GONOSUMDB='github.com/Serialeo/*'
+```
+
+不要把人类账号的长期 token 复制给服务用户，也不要把 token 写入仓库。
 
 开发检查：
 
@@ -322,4 +347,16 @@ make check
 make ci
 ```
 
-仓库自带的 `docker-compose.yml` 默认从当前源码构建本地镜像，适合开发和测试。更多开发约束见 [`AGENTS.md`](./AGENTS.md)。
+仓库自带的 `docker-compose.yml` 是生产拉取配置，不再隐式执行源码 build。开发 Docker build 使用显式 override，并通过 BuildKit secret 提供 protocol 只读凭据：
+
+```bash
+export PRIVATE_GO_READ_TOKEN='<Serialeo/agentdock-protocol Contents: Read token>'
+docker compose -f docker-compose.yml -f docker-compose.dev.yml build nexusdock
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+`PRIVATE_GO_READ_TOKEN` 只在 build 阶段挂载，不会作为 Dockerfile `ARG` 写入镜像层。更多开发约束见 [`AGENTS.md`](./AGENTS.md)。
+
+私有容器发行采用“候选镜像先验收、最终 tag 后发布”的顺序。源码 CI 通过后，在目标 commit 上手动运行 **Publish container**；非 `v*` 的 workflow dispatch 只发布 `ghcr.io/serialeo/nexusdock:sha-<short-commit>`，不会更新 `latest`。AgentDock 同步运行 **Publish candidate containers** 生成 runtime/dev/browser 三个 `sha-*` 候选。随后在本仓运行 **Verify paired private images**，传入四个精确 SHA 标签或 digest；该 workflow 会验证私有可见性、多架构 manifest、镜像凭据泄漏、各 variant 启动、真实 A↔N 配对、Global/Node/Direct/Stage3 设置以及 A/N 数据卷重启持久化。只有这一步通过后才创建配套的最终 A/N `v*` tag；最终 tag workflow 才更新 `latest`。
+
+跨仓拉取 AgentDock 私有 package 时，不要额外塞一个个人 package token 给该 workflow。应在 AgentDock package 的 Actions access 中授予 `Serialeo/nexusdock` 仓库读取权限，使本仓 `GITHUB_TOKEN` 以仓库身份读取配套镜像。

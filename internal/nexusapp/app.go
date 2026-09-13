@@ -19,8 +19,10 @@ import (
 	"github.com/uvwt/nexusdock/internal/core"
 	"github.com/uvwt/nexusdock/internal/httpx"
 	"github.com/uvwt/nexusdock/internal/privatenotes"
+	projectstore "github.com/uvwt/nexusdock/internal/project"
 	"github.com/uvwt/nexusdock/internal/recall"
 	"github.com/uvwt/nexusdock/internal/settings"
+	"github.com/uvwt/nexusdock/internal/versioning"
 )
 
 func Main(args []string) int {
@@ -52,6 +54,8 @@ func run(args []string) error {
 		return fmt.Errorf("initialize private notes: %w", err)
 	}
 
+	versionManager := versioning.NewManager(cfg.RecallRepoDir, logger)
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -60,9 +64,7 @@ func run(args []string) error {
 		return fmt.Errorf("create control plane directory: %w", err)
 	}
 	controlDBPath := filepath.Join(controlDir, "nexus.db")
-	// 控制库事务都很短，生产又运行在 macOS 外置卷的 Docker bind mount 上。
-	// 保持单个 SQLite 连接，并由 OpenSQLite 使用 rollback journal，降低跨宿主文件系统的一致性风险。
-	controlDB, err := core.OpenSQLite(ctx, controlDBPath, 1)
+	controlDB, err := core.OpenSQLite(ctx, controlDBPath, 4)
 	if err != nil {
 		return fmt.Errorf("open control plane database: %w", err)
 	}
@@ -88,6 +90,10 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("initialize AgentDock node store: %w", err)
 	}
+	projects, err := projectstore.NewStore(controlDB)
+	if err != nil {
+		return fmt.Errorf("initialize Project store: %w", err)
+	}
 
 	mcpTokenStore, err := auth.NewMCPTokenStore(controlDir)
 	if err != nil {
@@ -111,9 +117,11 @@ func run(args []string) error {
 	server := httpx.NewServer(
 		cfg,
 		store,
+		versionManager,
 		logger,
 		httpx.WithSystemDatabase(controlDB),
 		httpx.WithAgentDockNodes(agentDockNodes),
+		httpx.WithProjects(projects),
 		httpx.WithWebAuthentication(authService),
 		httpx.WithEmbeddingService(embeddingService),
 		httpx.WithRuntimeSettings(runtimeSettings),

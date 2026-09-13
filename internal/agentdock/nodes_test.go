@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	protocol "github.com/uvwt/agentdock-protocol"
+	protocol "github.com/Serialeo/agentdock-protocol"
 	"github.com/uvwt/nexusdock/internal/core"
 )
 
@@ -126,7 +126,7 @@ func TestHelloRequiresExplicitUIResources(t *testing.T) {
 		UIResources: nil,
 	})
 	var validation ValidationError
-	if !errors.As(err, &validation) || validation.Message != "AgentDock Bridge v2 握手必须声明 ui_resources" {
+	if !errors.As(err, &validation) || validation.Message != "AgentDock Bridge v4 握手必须声明 ui_resources" {
 		t.Fatalf("missing ui_resources error = %#v", err)
 	}
 
@@ -226,6 +226,18 @@ func TestHelloUpdatesCapabilitiesAndDisabledNodeIsRejected(t *testing.T) {
 	descriptors, err := store.ToolDescriptors(t.Context(), node.ID)
 	if err != nil || len(descriptors) != 1 || descriptors[0].Name != "read_file" {
 		t.Fatalf("tool descriptors = %#v err=%v", descriptors, err)
+	}
+	fullAccess := true
+	updatedAccess, err := store.Update(t.Context(), node.ID, UpdateInput{FullAccess: &fullAccess})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updatedAccess.FullAccess {
+		t.Fatalf("full access update not persisted: %#v", updatedAccess)
+	}
+	loaded, err := store.Get(t.Context(), node.ID)
+	if err != nil || !loaded.FullAccess {
+		t.Fatalf("full access round trip = %#v err=%v", loaded, err)
 	}
 	enabled := false
 	if _, err := store.Update(t.Context(), node.ID, UpdateInput{Enabled: &enabled}); err != nil {

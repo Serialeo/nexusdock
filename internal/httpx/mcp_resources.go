@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	protocol "github.com/Serialeo/agentdock-protocol"
+	"github.com/Serialeo/agentdock-protocol/mcpapps"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	protocol "github.com/uvwt/agentdock-protocol"
-	"github.com/uvwt/agentdock-protocol/mcpapps"
 	"github.com/uvwt/nexusdock/internal/agentdock"
 )
 
@@ -38,7 +38,8 @@ func nexusOwnedMCPAppByURI(uri string) (nexusOwnedMCPApp, bool) {
 }
 
 func (s *Server) syncMCPAppResources() {
-	if s == nil || s.mcpServer == nil {
+	server := s.currentMCPServer()
+	if s == nil || server == nil {
 		return
 	}
 
@@ -70,39 +71,45 @@ func (s *Server) syncMCPAppResources() {
 		if _, ok := desired[uri]; ok {
 			continue
 		}
-		s.mcpServer.RemoveResources(uri)
+		server.RemoveResources(uri)
 		delete(s.mcpResources, uri)
 	}
 	for _, uri := range sortedMCPAppResourceURIs(desired) {
 		if _, ok := s.mcpResources[uri]; ok {
 			continue
 		}
-		uri := uri
-		localApp, local := nexusOwnedMCPAppByURI(uri)
-		title := "AgentDock MCP App"
-		description := "MCP App resource relayed from a compatible AgentDock node."
-		if local {
-			title = localApp.Title
-			description = localApp.Description
-		}
-		s.mcpServer.AddResource(&mcpsdk.Resource{
-			URI:         uri,
-			Name:        mcpAppResourceName(uri),
-			Title:       title,
-			Description: description,
-			MIMEType:    protocol.MCPAppMIMEType,
-			Meta:        nexusMCPAppResourceMeta(s.cfg.PublicURL),
-		}, func(ctx context.Context, request *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
-			if request == nil || request.Params == nil || request.Params.URI != uri {
-				return nil, mcpsdk.ResourceNotFoundError(uri)
-			}
-			if local {
-				return nexusOwnedMCPAppReadResult(localApp, s.cfg.PublicURL), nil
-			}
-			return s.readPublishedMCPAppResource(ctx, uri)
-		})
+		s.addMCPAppResourceOn(server, uri)
 		s.mcpResources[uri] = struct{}{}
 	}
+}
+
+func (s *Server) addMCPAppResourceOn(server *mcpsdk.Server, uri string) {
+	if server == nil {
+		return
+	}
+	localApp, local := nexusOwnedMCPAppByURI(uri)
+	title := "AgentDock MCP App"
+	description := "MCP App resource relayed from a compatible AgentDock node."
+	if local {
+		title = localApp.Title
+		description = localApp.Description
+	}
+	server.AddResource(&mcpsdk.Resource{
+		URI:         uri,
+		Name:        mcpAppResourceName(uri),
+		Title:       title,
+		Description: description,
+		MIMEType:    protocol.MCPAppMIMEType,
+		Meta:        nexusMCPAppResourceMeta(s.cfg.PublicURL),
+	}, func(ctx context.Context, request *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
+		if request == nil || request.Params == nil || request.Params.URI != uri {
+			return nil, mcpsdk.ResourceNotFoundError(uri)
+		}
+		if local {
+			return nexusOwnedMCPAppReadResult(localApp, s.cfg.PublicURL), nil
+		}
+		return s.readPublishedMCPAppResource(ctx, uri)
+	})
 }
 
 func (s *Server) publishedMCPAppResourceURIs(ctx context.Context) (map[string]struct{}, error) {

@@ -1,0 +1,72 @@
+.ops-task-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--nx-line);
+  border-radius: 7px;
+  background: #fff;
+}
+.ops-task-filters > label { display: grid; gap: 5px; color: var(--nx-muted); font-size: 11px; }
+.ops-task-filters select,
+.ops-task-filters input {
+  min-width: 130px;
+  max-width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--nx-line-strong);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--nx-text);
+  font: inherit;
+}
+.ops-task-filters > small { align-self: center; color: var(--nx-muted); font-size: 10px; }
+.ops-task-filters > button { margin-left: auto; }
+.ops-task-selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  min-height: 46px;
+  padding: 8px 12px;
+  border: 1px solid var(--nx-line);
+  border-radius: 7px;
+  background: #fff;
+  font-size: 11px;
+}
+.ops-task-selection > label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.ops-task-selection > span { color: var(--nx-muted); }
+.ops-task-selection > span[role="status"] { display: flex; align-items: center; gap: 5px; }
+.ops-task-selection .ops-task-bulk-delete { margin-left: auto; }
+.ops-task-selection input,
+.ops-task-check input { width: 16px; height: 16px; margin: 0; accent-color: #171717; cursor: pointer; }
+.ops-task-selection input:disabled,
+.ops-task-check input:disabled { cursor: default; }
+.ops-task-browser { display: grid; gap: 7px; min-width: 0; }
+.ops-task-browser .ops-task-rail { max-height: calc(100vh - 340px); min-height: 180px; }
+.ops-task-row { display: grid; grid-template-columns: 30px minmax(0, 1fr); border-radius: 5px; min-width: 0; }
+.ops-task-row.is-checked { background: #f0f0f0; }
+.ops-task-check { display: flex; align-items: flex-start; justify-content: center; padding-top: 12px; cursor: pointer; }
+.ops-task-line:focus-visible,
+.ops-task-filters select:focus-visible,
+.ops-task-filters input:focus-visible,
+.ops-task-check input:focus-visible,
+.ops-task-selection input:focus-visible { outline: 2px solid #555; outline-offset: 2px; }
+.ops-task-pagination { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; font-size: 10px; color: var(--nx-muted); }
+.ops-task-pagination > span { margin-right: auto; }
+.ops-task-delete-preview { display: grid; gap: 8px; max-height: 260px; overflow: auto; padding-left: 20px; }
+.ops-task-delete-preview strong,
+.ops-task-delete-preview code { display: block; overflow-wrap: anywhere; }
+.ops-task-delete-preview code { color: var(--nx-muted); font-size: 10px; margin-top: 3px; }
+.ops-task-delete-errors { max-height: 180px; overflow: auto; overflow-wrap: anywhere; padding: 10px 10px 10px 25px; border: 1px solid var(--nx-danger-line); border-radius: 5px; background: var(--nx-danger-bg); color: var(--nx-danger); font-size: 11px; }
+@media (max-width: 760px) {
+  .ops-task-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ops-task-filters select,
+  .ops-task-filters input { min-width: 0; width: 100%; }
+  .ops-task-filters > small { grid-column: 1 / -1; }
+  .ops-task-filters > button { margin: 0; }
+  .ops-task-selection { gap: 8px; }
+  .ops-task-selection .ops-task-bulk-delete { margin-left: 0; }
+  .ops-task-browser .ops-task-rail { max-height: none; }
+}

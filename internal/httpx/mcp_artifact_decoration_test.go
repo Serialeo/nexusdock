@@ -11,15 +11,15 @@ import (
 	"testing"
 	"time"
 
+	protocol "github.com/Serialeo/agentdock-protocol"
 	"github.com/gorilla/websocket"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	protocol "github.com/uvwt/agentdock-protocol"
 	"github.com/uvwt/nexusdock/internal/agentdock"
 	"github.com/uvwt/nexusdock/internal/config"
 )
 
 func TestCallNodeToolKeepsSuccessWhenArtifactDecorationFails(t *testing.T) {
-	store := newHTTPTestAgentDockStore(t)
+	store, projects := newNodeRoutingTestStores(t)
 	pairing, err := store.CreatePairingCode(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +29,7 @@ func TestCallNodeToolKeepsSuccessWhenArtifactDecorationFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	descriptor := agentdock.ToolDescriptor{
-		Name:        "file_publish",
+		Name:        "browser_snapshot",
 		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 	}
 	hub := agentdock.NewHub(store)
@@ -78,6 +78,10 @@ func TestCallNodeToolKeepsSuccessWhenArtifactDecorationFails(t *testing.T) {
 			serveDone <- &unexpectedOperationError{got: invoke.Operation}
 			return
 		}
+		if invoke.ExecutionContext == nil || invoke.ExecutionContext.TargetID == "" || invoke.ExecutionContext.DeploymentID == "" {
+			serveDone <- &unexpectedOperationError{got: "missing execution_context"}
+			return
+		}
 		envelope := map[string]any{
 			"isError": false,
 			"structuredContent": map[string]any{
@@ -104,14 +108,15 @@ func TestCallNodeToolKeepsSuccessWhenArtifactDecorationFails(t *testing.T) {
 		cfg:          config.Config{PublicURL: "https://nexus.example.test", NexusDataDir: badDataDir},
 		agentDock:    store,
 		agentDockHub: hub,
+		projects:     projects,
 		mcpServer:    mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test", Version: "1"}, nil),
 		mcpTools:     make(map[string]publishedNodeTool),
 		mcpResources: make(map[string]struct{}),
 		logger:       slog.Default(),
 	}
 	server.registerNodeTools(node, agentdock.Hello{Tools: []agentdock.ToolDescriptor{descriptor}})
-
-	result, err := server.callNodeTool(t.Context(), descriptor.Name, map[string]any{"node_id": node.ID})
+	ctx, route := bindNodeRoutingTargetForTest(t, projects, node)
+	result, err := server.callNodeTool(ctx, descriptor.Name, route)
 	if err != nil {
 		t.Fatal(err)
 	}

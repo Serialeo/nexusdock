@@ -1,0 +1,11 @@
+services:
+  nexusdock:
+    image: nexusdock:local
+    build:
+      context: .
+      secrets:
+        - github_token
+
+secrets:
+  github_token:
+    environment: PRIVATE_GO_READ_TOKEN

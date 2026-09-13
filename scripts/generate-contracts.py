@@ -203,7 +203,7 @@ def build_schemas() -> dict[str, dict[str, Any]]:
             "database": scalar("string", "SQLite 健康状态。"),
             "schema_version": scalar("integer", "数据库 Schema 版本。", minimum=0),
             "nexus_data_dir": scalar("string", "Nexus 系统状态目录。"),
-            "recall_repo_dir": scalar("string", "Recall Markdown 数据目录。"),
+            "recall_repo_dir": scalar("string", "Recall Git Markdown 仓库目录。"),
         },
         ("ok", "service", "database", "schema_version", "nexus_data_dir", "recall_repo_dir"),
     )
@@ -465,6 +465,14 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         },
         ("action",),
     )
+    schemas["RuntimePromptUpdate"] = obj(
+        "Stage 3 System Prompt 更新指令；keep 保留覆盖，replace 保存自定义值，reset 恢复 bundled default。",
+        {
+            "action": enum("Prompt 更新动作。", ["keep", "replace", "reset"]),
+            "value": scalar("string", "仅 action=replace 时提交的完整 System Prompt；服务端按 UTF-8 bytes 限制为 64 KiB。", maxLength=65536, **{"x-maxBytes": 65536}),
+        },
+        ("action",),
+    )
     schemas["EmbeddingSettingsInput"] = obj(
         "向量检索与 Embedding 运行时配置。",
         {
@@ -485,12 +493,18 @@ def build_schemas() -> dict[str, dict[str, Any]]:
             "timeout_seconds": scalar("integer", "模型请求超时秒数。", minimum=1, maximum=300),
             "interval_minutes": scalar("integer", "Stage 3 执行间隔分钟数。", minimum=60, maximum=10080),
             "api_key": ref("RuntimeSecretUpdate"),
+            "system_prompt": ref("RuntimePromptUpdate"),
+            "review_node_id": scalar("string", "用于多节点或无唯一 evidence 来源 Stage 3 候选的显式审阅 AgentDock node_id；空值表示不派发此类候选。"),
         },
         ("enabled", "endpoint", "model", "timeout_seconds", "interval_minutes", "api_key"),
     )
     schemas["RuntimeAISettingsUpdateRequest"] = obj(
         "保存 Nexus Stage 3 与向量检索运行时配置。",
-        {"embedding": ref("EmbeddingSettingsInput"), "stage3": ref("Stage3SettingsInput")},
+        {
+            "embedding": ref("EmbeddingSettingsInput"),
+            "stage3": ref("Stage3SettingsInput"),
+            "expected_revision": scalar("string", "可选 AI 设置 revision；If-Match 也可提供。", pattern="^rev-[0-9]+$"),
+        },
         ("embedding", "stage3"),
     )
     schemas["EmbeddingSettingsView"] = obj(
@@ -514,8 +528,13 @@ def build_schemas() -> dict[str, dict[str, Any]]:
             "interval_minutes": scalar("integer", "执行间隔分钟数。", minimum=60, maximum=10080),
             "api_key_configured": scalar("boolean", "是否已配置 API Key；不返回明文。"),
             "configured": scalar("boolean", "Stage 3 是否具备运行所需的启用、地址和模型配置。"),
+            "system_prompt": scalar("string", "当前实际用于 Stage 3 model request 的 effective System Prompt。", maxLength=65536, **{"x-maxBytes": 65536}),
+            "bundled_system_prompt": scalar("string", "当前版本内置的 bundled default System Prompt。", maxLength=65536, **{"x-maxBytes": 65536}),
+            "system_prompt_source": enum("effective System Prompt 来源。", ["bundled_default", "custom"]),
+            "system_prompt_updated_at": scalar("string", "自定义 System Prompt 最近保存时间；bundled default 时省略。", format="date-time"),
+            "review_node_id": scalar("string", "当前显式 Stage 3 审阅 AgentDock node_id；空值表示无 fallback。"),
         },
-        ("enabled", "endpoint", "model", "timeout_seconds", "interval_minutes", "api_key_configured", "configured"),
+        ("enabled", "endpoint", "model", "timeout_seconds", "interval_minutes", "api_key_configured", "configured", "system_prompt", "bundled_system_prompt", "system_prompt_source", "review_node_id"),
     )
     schemas["RuntimeAISettingsView"] = obj(
         "Nexus 当前已脱敏的 AI 与向量检索配置。",
@@ -523,9 +542,10 @@ def build_schemas() -> dict[str, dict[str, Any]]:
             "embedding": ref("EmbeddingSettingsView"),
             "stage3": ref("Stage3SettingsView"),
             "persisted": scalar("boolean", "是否已保存 SQLite 覆盖配置；false 表示当前来自环境变量或默认值。"),
+            "revision": scalar("string", "运行时 AI 设置资源 revision。", pattern="^rev-[0-9]+$"),
             "updated_at": scalar("string", "最近一次持久化更新时间。", format="date-time"),
         },
-        ("embedding", "stage3", "persisted"),
+        ("embedding", "stage3", "persisted", "revision"),
     )
     schemas["RuntimeAISettingsResponse"] = obj(
         "运行时 AI 设置响应。",
@@ -802,6 +822,7 @@ def build_schemas() -> dict[str, dict[str, Any]]:
             "device_id": scalar("string", "AgentDock 生成的稳定设备 ID。"),
             "name": scalar("string", "节点显示名称。", minLength=1, maxLength=100),
             "enabled": scalar("boolean", "节点是否允许连接和 Runtime 请求。"),
+            "full_access": scalar("boolean", "Node 级 Project Full Access。开启时覆盖 Deployment 细粒度执行权限，但不改变 Project Folder/Prompt 边界。"),
             "version": scalar("string", "最近握手的 AgentDock 版本。"),
             "protocol_version": scalar("string", "节点连接协议版本。"),
             "os": scalar("string", "节点操作系统。"),
@@ -813,7 +834,7 @@ def build_schemas() -> dict[str, dict[str, Any]]:
             "created_at": TIMESTAMP,
             "updated_at": TIMESTAMP,
         },
-        ("id", "device_id", "name", "enabled", "capabilities", "online", "created_at", "updated_at"),
+        ("id", "device_id", "name", "enabled", "full_access", "capabilities", "online", "created_at", "updated_at"),
     )
     schemas["AgentDockPairingCode"] = obj(
         "短时单次 AgentDock 配对码。",
@@ -838,11 +859,428 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         ("code", "device_id", "name"),
     )
     schemas["AgentDockNodeUpdateRequest"] = obj(
-        "更新 AgentDock 节点显示信息或启用状态。",
+        "更新 AgentDock 节点显示信息、启用状态或 Project Full Access。",
         {
             "name": scalar("string", "节点显示名称。", minLength=1, maxLength=100),
             "enabled": scalar("boolean", "节点是否启用。"),
+            "full_access": scalar("boolean", "是否对该 Node 的 Project Target 开启 Full Access。与 Project Folder 独立。"),
         },
+    )
+    schemas["RuntimeTaskStep"] = obj(
+        "当前任务步骤摘要。",
+        {"id": scalar("string", "步骤标识。"), "title": scalar("string", "步骤标题。"), "status": scalar("string", "步骤状态。")},
+        ("id", "title", "status"),
+    )
+    schemas["RuntimeTaskSummary"] = obj(
+        "目标 AgentDock 的任务摘要。",
+        {
+            "id": scalar("string", "任务标识。"),
+            "title": scalar("string", "任务标题。"),
+            "goal": scalar("string", "任务目标。"),
+            "status": scalar("string", "任务状态。"),
+            "phase": scalar("string", "当前阶段。"),
+            "review_status": scalar("string", "复审状态。"),
+            "summary": scalar("string", "任务摘要。"),
+            "blocker": scalar("string", "阻塞原因。"),
+            "current_step": ref("RuntimeTaskStep"),
+            "completed_step_count": scalar("integer", "已完成步骤数。", minimum=0),
+            "updated_at": scalar("string", "任务更新时间，RFC3339。"),
+            "created_at": scalar("string", "任务创建时间，RFC3339。"),
+            "template_id": scalar("string", "工作流模板标识。"),
+            "template_version": scalar("string", "工作流模板版本。"),
+            **{name: scalar("integer", description, minimum=0) for name, description in {
+                "condition_count": "条件数量。", "step_count": "步骤数量。", "attempt_count": "尝试数量。", "event_count": "事件数量。",
+            }.items()},
+            "file_name": scalar("string", "详情和删除接口使用的任务标识，与 id 相同。"),
+        },
+        ("id", "title", "goal", "status", "phase", "review_status", "completed_step_count", "updated_at", "created_at", "condition_count", "step_count", "attempt_count", "event_count", "file_name"),
+    )
+    schemas["RuntimeTaskCounts"] = obj(
+        "满足搜索和时间范围的任务数量；忽略 status 筛选和分页。",
+        {name: scalar("integer", description, minimum=0) for name, description in {
+            "all": "所有状态合计。", "active": "进行中任务数量。", "blocked": "阻塞任务数量。", "completed": "已完成任务数量。",
+        }.items()},
+        ("all", "active", "blocked", "completed"),
+    )
+    schemas["RuntimeTaskListResponse"] = obj(
+        "由目标 AgentDock 在所有筛选完成后分页的任务列表；旧节点缺少分页元数据时返回明确错误。",
+        {
+            "ok": scalar("boolean", "请求是否成功。"),
+            "node_id": scalar("string", "稳定 Nexus node_id。"),
+            "items": array("本页任务。", ref("RuntimeTaskSummary")),
+            "count": scalar("integer", "本页返回数量，等于 items 长度。", minimum=0),
+            "total": scalar("integer", "满足 status、搜索和时间范围的全部任务数。", minimum=0),
+            "offset": scalar("integer", "请求的分页偏移；超出 total 时仍回显原值。", minimum=0),
+            "limit": scalar("integer", "请求的单页上限。", minimum=1, maximum=200),
+            "has_more": scalar("boolean", "当前页之后是否还有符合筛选的任务。"),
+            "counts": ref("RuntimeTaskCounts"),
+            "source": enum("数据来源。", ["agentdock-runtime-api"]),
+        },
+        ("ok", "node_id", "items", "count", "total", "offset", "limit", "has_more", "counts", "source"),
+    )
+    schemas["RuntimeFileBrowseEntry"] = obj(
+        "Node 文件浏览器返回的一个直接子项；不包含文件正文。",
+        {
+            "name": scalar("string", "目录项基础名称。"),
+            "path": scalar("string", "由目标 AgentDock 返回的完整规范路径；客户端不应自行拼接路径。"),
+            "type": enum("目录项类型。", ["directory", "file", "symlink", "other"]),
+            "size_bytes": scalar("integer", "目录项大小。", minimum=0),
+            "modified": TIMESTAMP,
+            "is_hidden": scalar("boolean", "目标平台是否将该目录项视为隐藏项。"),
+        },
+        ("name", "path", "type", "size_bytes", "modified", "is_hidden"),
+    )
+    schemas["RuntimeFileBrowseResponse"] = obj(
+        "指定 AgentDock 节点的一层只读目录浏览结果。结果按页返回，不读取文件正文。",
+        {
+            "ok": scalar("boolean", "请求是否成功。"),
+            "node_id": scalar("string", "稳定 Nexus node_id。"),
+            "path": scalar("string", "目标 AgentDock 解析后的当前目录完整规范路径。"),
+            "parent_path": scalar("string", "父目录完整规范路径；文件系统根目录为空字符串。"),
+            "entries": array("本页直接子项。", ref("RuntimeFileBrowseEntry")),
+            "offset": scalar("integer", "当前分页偏移。", minimum=0, maximum=10000),
+            "limit": scalar("integer", "当前页请求上限。", minimum=1, maximum=500),
+            "next_offset": scalar("integer", "存在下一页时的分页偏移。", minimum=1),
+            "truncated": scalar("boolean", "当前页之后是否仍有可浏览子项。"),
+            "partial": scalar("boolean", "是否因目标平台权限或瞬时文件变化跳过了部分子项。"),
+            "skipped_count": scalar("integer", "本次扫描中无法读取元数据而跳过的直接子项数量。", minimum=0),
+            "source": enum("数据来源。", ["agentdock-runtime-api"]),
+        },
+        ("ok", "node_id", "path", "parent_path", "entries", "offset", "limit", "truncated", "partial", "skipped_count", "source"),
+    )
+    schemas["RuntimeSkillEnvironmentEntry"] = obj(
+        "Skill 隔离环境变量元数据；不返回值。",
+        {
+            "key": scalar("string", "环境变量名。"),
+            "configured": scalar("boolean", "当前值是否为非空字符串。"),
+        },
+        ("key", "configured"),
+    )
+    schemas["RuntimeSkillEnvironmentResponse"] = obj(
+        "指定节点已安装 Skill 的隔离环境元数据。",
+        {
+            "ok": scalar("boolean", "请求是否成功。"),
+            "node_id": scalar("string", "稳定 Nexus node_id。"),
+            "skill_id": scalar("string", "Skill 名称。"),
+            "source": enum("可管理 Skill 来源。", ["agentdock-api"]),
+            "items": array("环境变量键与配置状态。", ref("RuntimeSkillEnvironmentEntry")),
+            "count": scalar("integer", "环境变量数量。", minimum=0),
+        },
+        ("ok", "node_id", "skill_id", "source", "items", "count"),
+    )
+    schemas["RuntimeSkillManageRequest"] = obj(
+        "管理目标 AgentDock 上已安装 Skill 的版本选择或隔离环境。",
+        {
+            "action": enum("管理动作。", ["activate", "rollback", "env_set", "env_unset"]),
+            "version": scalar("string", "activate 时必需的已安装版本。"),
+            "key": scalar("string", "env_set/env_unset 时必需的环境变量名。"),
+            "value": scalar("string", "仅 env_set 时存在；允许显式空字符串，且不会在响应中回显。"),
+        },
+        ("action",),
+    )
+    schemas["RuntimeSkillManageResponse"] = obj(
+        "Skill 节点设置操作结果；不包含环境变量值。",
+        {
+            "ok": scalar("boolean", "请求是否成功。"),
+            "node_id": scalar("string", "稳定 Nexus node_id。"),
+            "skill_id": scalar("string", "Skill 名称。"),
+            "source": enum("可管理 Skill 来源。", ["agentdock-api"]),
+            "action": enum("完成的操作。", ["activate", "rollback", "env_set", "env_unset"]),
+            "key": scalar("string", "环境变量名。"),
+            "configured": scalar("boolean", "env_set 后值是否非空。"),
+            "removed": scalar("boolean", "env_unset 是否移除了键。"),
+            "result": ref("JsonObject"),
+        },
+        ("ok", "node_id", "skill_id", "source", "action"),
+    )
+    schemas["DeploymentPermissions"] = obj(
+        "Project 执行的有效能力。full_access 来自 Node；working_folder 不是沙箱。",
+        {
+            "full_access": scalar("boolean", "Node Full Access 是否生效。true 时允许该 Node 已暴露的全部 Project 执行能力。"),
+            "files": enum("Full Access 关闭时的内置文件能力。", ["none", "read_only", "read_write"]),
+            "shell": scalar("boolean", "Full Access 关闭时是否允许新命令执行。"),
+            "browser": scalar("boolean", "Full Access 关闭时是否允许 Browser 能力。"),
+            "dynamic_mcp": scalar("boolean", "Full Access 关闭时是否允许动态 MCP 能力。"),
+            "acp": scalar("boolean", "Full Access 关闭时是否允许 ACP 能力。"),
+        },
+        ("full_access", "files", "shell", "browser", "dynamic_mcp", "acp"),
+    )
+    schemas["Project"] = obj(
+        "Nexus Project desired state。Project ID 稳定，不随重命名变化。",
+        {
+            "id": scalar("string", "稳定 Project ID。"),
+            "name": scalar("string", "Project 显示名称。"),
+            "orchestration_policy": scalar("string", "多 Target 编排说明；不会扩展硬权限。"),
+            "revision": scalar("string", "Project CAS revision。", pattern="^rev-[0-9]+$"),
+            "enabled": scalar("boolean", "是否允许建立新的 Project 工作会话。"),
+            "created_at": TIMESTAMP,
+            "updated_at": TIMESTAMP,
+            "deployments": array("可选内嵌 Deployment 列表。", ref("ProjectDeployment")),
+        },
+        ("id", "name", "orchestration_policy", "revision", "enabled", "created_at", "updated_at"),
+    )
+    schemas["ProjectDeployment"] = obj(
+        "一个 Project 在一个 AgentDock Node 上的 desired/applied Deployment 状态。",
+        {
+            "id": scalar("string", "稳定 Deployment ID；不等同于 node_id。"),
+            "project_id": scalar("string", "所属 Project ID。"),
+            "node_id": scalar("string", "绑定的 AgentDock Node ID。"),
+            "working_folder": scalar("string", "可选 Project Folder。非空时必须是目标 Node 原生绝对路径；空字符串表示使用 Node AgentDock 默认 cwd 且不自动发现 Project AGENTS.md。"),
+            "role": scalar("string", "用户可读环境角色标签，不是授权角色。"),
+            "purpose": scalar("string", "该环境用途说明。"),
+            "permissions": ref("DeploymentPermissions"),
+            "desired_revision": scalar("string", "Nexus 当前 desired revision。", pattern="^rev-[0-9]+$"),
+            "applied_revision": scalar("string", "AgentDock 已确认应用的 revision；尚未应用时为空字符串。", pattern="^(|rev-[0-9]+)$"),
+            "enabled": scalar("boolean", "是否允许该 Deployment 成为新 Target。"),
+            "apply_status": enum("desired/applied 同步状态。", ["draft", "pending", "applied", "failed", "disabled"]),
+            "last_error": scalar("string", "最近一次 apply/remove 安全错误；无错误时省略。"),
+            "created_at": TIMESTAMP,
+            "updated_at": TIMESTAMP,
+        },
+        ("id", "project_id", "node_id", "working_folder", "role", "purpose", "permissions", "desired_revision", "applied_revision", "enabled", "apply_status", "created_at", "updated_at"),
+    )
+    schemas["ProjectCreateRequest"] = obj(
+        "创建 Project。",
+        {
+            "name": scalar("string", "Project 显示名称。", minLength=1),
+            "orchestration_policy": scalar("string", "可选编排说明。"),
+            "enabled": scalar("boolean", "是否启用；省略时默认为 true。"),
+        },
+        ("name",),
+    )
+    schemas["ProjectUpdateRequest"] = obj(
+        "使用 CAS 更新 Project。",
+        {
+            "expected_revision": scalar("string", "调用方看到的 Project revision。", pattern="^rev-[0-9]+$"),
+            "name": scalar("string", "Project 显示名称。", minLength=1),
+            "orchestration_policy": scalar("string", "编排说明。"),
+            "enabled": scalar("boolean", "是否启用。"),
+        },
+        ("expected_revision", "name", "enabled"),
+    )
+    schemas["ProjectDeleteRequest"] = obj(
+        "使用 CAS 删除 Project desired state；不会删除 Node working_folder。",
+        {"expected_revision": scalar("string", "调用方看到的 Project revision。", pattern="^rev-[0-9]+$")},
+        ("expected_revision",),
+    )
+    schemas["ProjectResponse"] = obj(
+        "单个 Project 响应。",
+        {"ok": scalar("boolean", "请求是否成功。"), "project": ref("Project")},
+        ("ok", "project"),
+    )
+    schemas["ProjectListResponse"] = obj(
+        "Project 列表响应。",
+        {"ok": scalar("boolean", "请求是否成功。"), "projects": array("Projects。", ref("Project")), "count": scalar("integer", "Project 数量。", minimum=0)},
+        ("ok", "projects", "count"),
+    )
+    schemas["ProjectDeleteResponse"] = obj(
+        "Project desired state 删除结果。",
+        {
+            "ok": scalar("boolean", "请求是否成功。"),
+            "project_id": scalar("string", "已删除 Project ID。"),
+            "deleted": scalar("boolean", "固定为 true。"),
+            "deployment_removals": scalar("integer", "为 Node 暂存的 Deployment 撤销数量。", minimum=0),
+        },
+        ("ok", "project_id", "deleted", "deployment_removals"),
+    )
+    schemas["ProjectDeploymentCreateRequest"] = obj(
+        "创建 Project Deployment desired state。",
+        {
+            "node_id": scalar("string", "绑定 AgentDock Node ID。", minLength=1),
+            "working_folder": scalar("string", "可选 Project Folder；空字符串表示使用 Node 默认 cwd 且没有 Project Prompt 搜索根。"),
+            "role": scalar("string", "可选环境角色标签。"),
+            "purpose": scalar("string", "可选用途说明。"),
+            "permissions": ref("DeploymentPermissions"),
+            "enabled": scalar("boolean", "是否启用；省略时默认为 true。"),
+        },
+        ("node_id", "working_folder", "permissions"),
+    )
+    schemas["ProjectDeploymentUpdateRequest"] = obj(
+        "使用 CAS 更新 Project Deployment desired state。",
+        {
+            "expected_revision": scalar("string", "调用方看到的 desired revision。", pattern="^rev-[0-9]+$"),
+            "working_folder": scalar("string", "可选 Project Folder；允许清空为 Node 默认 cwd 模式。"),
+            "role": scalar("string", "环境角色标签。"),
+            "purpose": scalar("string", "用途说明。"),
+            "permissions": ref("DeploymentPermissions"),
+            "enabled": scalar("boolean", "是否启用。"),
+        },
+        ("expected_revision", "working_folder", "permissions", "enabled"),
+    )
+    schemas["ProjectDeploymentDeleteRequest"] = obj(
+        "使用 CAS 移除 Deployment 授权；不会删除 working_folder。",
+        {"expected_revision": scalar("string", "调用方看到的 desired revision。", pattern="^rev-[0-9]+$")},
+        ("expected_revision",),
+    )
+    schemas["ProjectDeploymentResponse"] = obj(
+        "单个 Project Deployment 响应。",
+        {"ok": scalar("boolean", "请求是否成功。"), "deployment": ref("ProjectDeployment")},
+        ("ok", "deployment"),
+    )
+    schemas["ProjectDeploymentListResponse"] = obj(
+        "Project Deployment 列表响应。",
+        {"ok": scalar("boolean", "请求是否成功。"), "deployments": array("Deployments。", ref("ProjectDeployment")), "count": scalar("integer", "Deployment 数量。", minimum=0)},
+        ("ok", "deployments", "count"),
+    )
+    schemas["ProjectDeploymentDeleteResponse"] = obj(
+        "Deployment desired state 删除结果。",
+        {"ok": scalar("boolean", "请求是否成功。"), "deployment_id": scalar("string", "已删除 Deployment ID。"), "deleted": scalar("boolean", "固定为 true。")},
+        ("ok", "deployment_id", "deleted"),
+    )
+    schemas["ProjectPromptSource"] = obj(
+        "一个适用的 AGENTS.md Project Prompt 来源。",
+        {
+            "path": scalar("string", "相对 Deployment working_folder 的 AGENTS.md 路径。"),
+            "scope": scalar("string", "该规则文件生效的 Project 相对子目录；根目录为 .。"),
+            "sha256": scalar("string", "规则正文 SHA-256 revision。", pattern="^sha256:[0-9a-f]{64}$"),
+            "bytes": scalar("integer", "UTF-8 正文字节数。", minimum=0),
+            "content": scalar("string", "完整规则正文；不会用摘要替代。"),
+        },
+        ("path", "scope", "sha256", "bytes", "content"),
+    )
+    schemas["ProjectPrompt"] = obj(
+        "Node 对一个 cwd 完整解析出的 Project Prompt 链。",
+        {
+            "prompt_revision": scalar("string", "完整来源链 revision。", pattern="^sha256:[0-9a-f]{64}$"),
+            "complete": scalar("boolean", "是否完整读取且通过预算校验。"),
+            "bytes": scalar("integer", "完整来源链总字节数。", minimum=0),
+            "sources": array("root 到 cwd 的完整适用 AGENTS.md 来源。", ref("ProjectPromptSource")),
+        },
+        ("prompt_revision", "complete", "bytes", "sources"),
+    )
+    schemas["ProjectPromptLoadResult"] = obj(
+        "Project Prompt 预览结果。",
+        {
+            "deployment_id": scalar("string", "Deployment ID。"),
+            "cwd_rel": scalar("string", "Node 规范化后的 Project 相对 cwd。"),
+            "prompt": ref("ProjectPrompt"),
+        },
+        ("deployment_id", "cwd_rel", "prompt"),
+    )
+    schemas["ProjectPromptWriteRequest"] = obj(
+        "只允许管理面在指定 Project scope 创建或 CAS 更新真实 AGENTS.md。",
+        {
+            "scope": scalar("string", "Deployment working_folder 内的相对子目录；根目录为 .。"),
+            "content": scalar("string", "完整 UTF-8 AGENTS.md 正文，最大 64 KiB。", maxLength=65536),
+            "expected_sha256": scalar("string", "更新已有规则时必须匹配的来源 SHA-256；创建时为空或省略。"),
+            "create": scalar("boolean", "true 表示仅当 AGENTS.md 不存在时创建。"),
+        },
+        ("scope", "content", "create"),
+    )
+    schemas["ProjectPromptWriteResult"] = obj(
+        "写入后重新解析得到的 Project Prompt 与实际来源。",
+        {
+            "deployment_id": scalar("string", "Deployment ID。"),
+            "scope": scalar("string", "Node 规范化后的写入 scope。"),
+            "source": ref("ProjectPromptSource"),
+            "prompt": ref("ProjectPrompt"),
+            "created": scalar("boolean", "是否创建了新 AGENTS.md。"),
+        },
+        ("deployment_id", "scope", "source", "prompt", "created"),
+    )
+    schemas["ProjectPromptPreviewResponse"] = obj(
+        "Project Prompt 管理预览响应；不等同于 MCP Host 已接收 context。",
+        {
+            "ok": scalar("boolean", "请求是否成功。"),
+            "project_id": scalar("string", "Project ID。"),
+            "deployment": ref("ProjectDeployment"),
+            "working_folder": scalar("string", "目标 Node 真实 working_folder。"),
+            "result": ref("ProjectPromptLoadResult"),
+        },
+        ("ok", "project_id", "deployment", "working_folder", "result"),
+    )
+    schemas["ProjectPromptWriteResponse"] = obj(
+        "Project Prompt AGENTS.md 写入响应。",
+        {
+            "ok": scalar("boolean", "请求是否成功。"),
+            "project_id": scalar("string", "Project ID。"),
+            "deployment": ref("ProjectDeployment"),
+            "working_folder": scalar("string", "目标 Node 真实 working_folder。"),
+            "result": ref("ProjectPromptWriteResult"),
+        },
+        ("ok", "project_id", "deployment", "working_folder", "result"),
+    )
+    schemas["ProjectContextDeliveryEvidence"] = obj(
+        "管理员控制台可观察的 Project Context delivery 证据。returned 只表示 Nexus 已返回完整模型可见 tool result；host_consumed 只表示同一 MCP Host 显式确认该 revision。",
+        {
+            "work_session_id": scalar("string", "WorkSession ID。"),
+            "target_id": scalar("string", "Target ID；session-level project_open delivery 时省略。"),
+            "context_revision": scalar("string", "该 delivery 证据对应的 context revision。"),
+            "status": enum("真实 delivery 状态。", ["returned", "host_consumed"]),
+            "returned_at": TIMESTAMP,
+            "host_consumed_at": TIMESTAMP,
+            "updated_at": TIMESTAMP,
+        },
+        ("work_session_id", "context_revision", "status", "returned_at", "updated_at"),
+    )
+    schemas["ProjectWorkSession"] = obj(
+        "管理员控制台可观察的 Project WorkSession；MCP owner 与 request hash 不序列化。",
+        {
+            "work_session_id": scalar("string", "WorkSession ID。"),
+            "project_id": scalar("string", "Project ID。"),
+            "client_request_id": scalar("string", "MCP Host 提供的幂等 request ID。"),
+            "project_revision": scalar("string", "该会话当前绑定的 Project revision。"),
+            "status": enum("WorkSession 状态。", ["preparing", "ready", "running", "completed", "partial", "failed", "cancelled"]),
+            "context_revision": scalar("string", "当前聚合 Project context revision；未准备完成时可为空。"),
+            "created_at": TIMESTAMP,
+            "updated_at": TIMESTAMP,
+            "delivery": ref("ProjectContextDeliveryEvidence"),
+        },
+        ("work_session_id", "project_id", "client_request_id", "project_revision", "status", "context_revision", "created_at", "updated_at"),
+    )
+    schemas["ProjectPromptScopeRevision"] = obj(
+        "Target 已交付过的 Prompt scope/revision。",
+        {"scope": scalar("string", "Project 相对 scope。"), "prompt_revision": scalar("string", "Prompt revision。")},
+        ("scope", "prompt_revision"),
+    )
+    schemas["ProjectWorkTargetValue"] = obj(
+        "WorkSession 内一个 server-bound Target 的公开观察状态。",
+        {
+            "target_id": scalar("string", "Target ID。"),
+            "work_session_id": scalar("string", "WorkSession ID。"),
+            "project_id": scalar("string", "Project ID。"),
+            "deployment_id": scalar("string", "Deployment ID。"),
+            "node_id": scalar("string", "AgentDock Node ID。"),
+            "cwd_rel": scalar("string", "该 Target 独立 Project 相对 cwd。"),
+            "deployment_revision": scalar("string", "Target 绑定的 applied Deployment revision。"),
+            "context_revision": scalar("string", "Target context revision。"),
+            "status": enum("Target 状态。", ["preparing", "ready", "running", "idle", "unavailable", "context_error", "revoked"]),
+            "permissions": ref("DeploymentPermissions"),
+            "prompt": ref("ProjectPrompt"),
+        },
+        ("target_id", "work_session_id", "project_id", "deployment_id", "node_id", "cwd_rel", "deployment_revision", "context_revision", "status", "permissions", "prompt"),
+    )
+    schemas["ProjectWorkTarget"] = obj(
+        "Target 及其 Prompt delivery scopes；只读用于管理员观察。",
+        {
+            "target": ref("ProjectWorkTargetValue"),
+            "prompt_scopes": array("Target 已交付 Prompt scopes。", ref("ProjectPromptScopeRevision")),
+            "last_error": scalar("string", "Target 最近准备/撤销错误。"),
+            "created_at": TIMESTAMP,
+            "updated_at": TIMESTAMP,
+            "delivery": ref("ProjectContextDeliveryEvidence"),
+        },
+        ("target", "prompt_scopes", "created_at", "updated_at"),
+    )
+    schemas["ProjectWorkSessionListResponse"] = obj(
+        "Project 范围的 WorkSession 只读列表。",
+        {
+            "ok": scalar("boolean", "请求是否成功。"),
+            "project_id": scalar("string", "Project ID。"),
+            "sessions": array("WorkSessions。", ref("ProjectWorkSession")),
+            "count": scalar("integer", "WorkSession 数量。", minimum=0),
+        },
+        ("ok", "project_id", "sessions", "count"),
+    )
+    schemas["ProjectWorkSessionDetailResponse"] = obj(
+        "Project WorkSession 与 Target 只读详情。",
+        {
+            "ok": scalar("boolean", "请求是否成功。"),
+            "project_id": scalar("string", "Project ID。"),
+            "session": ref("ProjectWorkSession"),
+            "targets": array("该 WorkSession 的 Targets。", ref("ProjectWorkTarget")),
+        },
+        ("ok", "project_id", "session", "targets"),
     )
     schemas["AgentDockNodeListResponse"] = obj(
         "AgentDock 节点列表。",
@@ -900,6 +1338,9 @@ def build_openapi(schemas: dict[str, Any]) -> dict[str, Any]:
         "RuntimeSkillId": path_param("skillID", "AgentDock Runtime skill ID。", uuid=False),
         "RuntimeSkillFilePath": path_param("filePath", "AgentDock Runtime Skill 文件相对路径。", uuid=False),
         "RuntimeMCPName": path_param("name", "AgentDock 动态 MCP 服务名称。", uuid=False),
+        "ProjectId": path_param("projectID", "稳定 Project ID。", uuid=False),
+        "DeploymentId": path_param("deploymentID", "稳定 Deployment ID。", uuid=False),
+        "WorkSessionId": path_param("workSessionID", "Project WorkSession ID。", uuid=False),
         "WorkflowTemplateId": path_param("templateID", "Nexus 工作流模板 ID。", uuid=False),
         "WorkflowTemplateVersion": path_param("version", "Nexus 工作流模板版本。", uuid=False),
     }
@@ -920,7 +1361,7 @@ def build_openapi(schemas: dict[str, Any]) -> dict[str, Any]:
         success_code: str = "200",
         additional_success: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        responses = {success_code: success or ok(), "400": error, "401": error, "403": error, "404": error, "409": error}
+        responses = {success_code: success or ok(), "400": error, "401": error, "403": error, "404": error, "409": error, "412": error}
         if additional_success:
             responses.update(additional_success)
         value: dict[str, Any] = {
@@ -1165,6 +1606,126 @@ def build_openapi(schemas: dict[str, Any]) -> dict[str, Any]:
                 success=ok(ref("PrivateNoteMaintenanceResponse")),
             )
         },
+        "/v1/git/diff": {"get": operation("getGitDiff", "读取召回仓库变更")},
+        "/v1/git/log": {
+            "get": operation(
+                "getGitLog",
+                "读取召回仓库提交历史",
+                params=[q("limit", "最大提交数量；无效值使用服务默认值。", "integer", minimum=1)],
+            )
+        },
+        "/v1/git/commit": {
+            "get": operation(
+                "getGitCommit",
+                "读取召回仓库提交详情",
+                params=[q("hash", "Git 提交哈希。", required=True, minLength=1)],
+            ),
+            "post": operation("recordGitVersion", "记录当前 Recall 本地版本", request=body()),
+        },
+        "/v1/projects": {
+            "get": operation("listProjects", "列出管理员可管理的 Projects", success=ok(ref("ProjectListResponse"))),
+            "post": operation(
+                "createProject",
+                "创建 Project desired state",
+                request=body(ref("ProjectCreateRequest")),
+                success=ok(ref("ProjectResponse")),
+                success_code="201",
+            ),
+        },
+        "/v1/projects/{projectID}": {
+            "get": operation("getProject", "读取 Project desired state", params=[p("ProjectId")], success=ok(ref("ProjectResponse"))),
+            "put": operation(
+                "updateProject",
+                "使用 CAS 更新 Project desired state",
+                params=[p("ProjectId")],
+                request=body(ref("ProjectUpdateRequest")),
+                success=ok(ref("ProjectResponse")),
+            ),
+            "delete": operation(
+                "deleteProject",
+                "使用 CAS 删除 Project desired state 并暂存 Node 授权撤销；不会删除 working_folder",
+                params=[p("ProjectId")],
+                request=body(ref("ProjectDeleteRequest")),
+                success=ok(ref("ProjectDeleteResponse")),
+            ),
+        },
+        "/v1/projects/{projectID}/deployments": {
+            "get": operation(
+                "listProjectDeployments",
+                "列出 Project Deployments",
+                params=[p("ProjectId")],
+                success=ok(ref("ProjectDeploymentListResponse")),
+            ),
+            "post": operation(
+                "createProjectDeployment",
+                "创建 Project Deployment desired state；在线 Node 会立即尝试 Bridge v4 apply",
+                params=[p("ProjectId")],
+                request=body(ref("ProjectDeploymentCreateRequest")),
+                success=ok(ref("ProjectDeploymentResponse")),
+                success_code="201",
+            ),
+        },
+        "/v1/projects/{projectID}/deployments/{deploymentID}": {
+            "get": operation(
+                "getProjectDeployment",
+                "读取 Project Deployment desired/applied 状态",
+                params=[p("ProjectId"), p("DeploymentId")],
+                success=ok(ref("ProjectDeploymentResponse")),
+            ),
+            "put": operation(
+                "updateProjectDeployment",
+                "使用 CAS 更新 Project Deployment desired state 并尝试 Bridge v4 apply",
+                params=[p("ProjectId"), p("DeploymentId")],
+                request=body(ref("ProjectDeploymentUpdateRequest")),
+                success=ok(ref("ProjectDeploymentResponse")),
+            ),
+            "delete": operation(
+                "deleteProjectDeployment",
+                "使用 CAS 删除 Deployment desired state 并撤销 Node 授权；不会删除 working_folder",
+                params=[p("ProjectId"), p("DeploymentId")],
+                request=body(ref("ProjectDeploymentDeleteRequest")),
+                success=ok(ref("ProjectDeploymentDeleteResponse")),
+            ),
+        },
+        "/v1/projects/{projectID}/deployments/{deploymentID}/apply": {
+            "post": operation(
+                "applyProjectDeployment",
+                "重试将当前 Deployment desired revision 通过 Bridge v4 应用到目标 AgentDock",
+                params=[p("ProjectId"), p("DeploymentId")],
+                success=ok(ref("ProjectDeploymentResponse")),
+            ),
+        },
+        "/v1/projects/{projectID}/deployments/{deploymentID}/prompt": {
+            "get": operation(
+                "previewProjectPrompt",
+                "从目标 AgentDock 读取指定 cwd 的完整 Project Prompt 规则链；这是管理预览，不代表 Host 已接收 context",
+                params=[p("ProjectId"), p("DeploymentId"), q("cwd_rel", "Deployment working_folder 内的 Project 相对 cwd；省略时为 .。")],
+                success=ok(ref("ProjectPromptPreviewResponse")),
+            ),
+            "put": operation(
+                "writeProjectPromptSource",
+                "只在目标 Node Project scope 内创建或 CAS 更新真实 AGENTS.md，并返回重新解析后的完整 Prompt",
+                params=[p("ProjectId"), p("DeploymentId")],
+                request=body(ref("ProjectPromptWriteRequest")),
+                success=ok(ref("ProjectPromptWriteResponse")),
+            ),
+        },
+        "/v1/projects/{projectID}/sessions": {
+            "get": operation(
+                "listProjectWorkSessions",
+                "只读列出该 Project 的 MCP WorkSessions；不暴露 owner binding 或 request hash",
+                params=[p("ProjectId"), q("limit", "最大 WorkSession 数量。", "integer", minimum=1, maximum=500)],
+                success=ok(ref("ProjectWorkSessionListResponse")),
+            ),
+        },
+        "/v1/projects/{projectID}/sessions/{workSessionID}": {
+            "get": operation(
+                "getProjectWorkSession",
+                "只读读取该 Project WorkSession 与 Targets；不创建 Nexus AI 会话",
+                params=[p("ProjectId"), p("WorkSessionId")],
+                success=ok(ref("ProjectWorkSessionDetailResponse")),
+            ),
+        },
         "/v1/runtime/nodes": {
             "get": operation("listAgentDockNodes", "列出 Nexus 管理的 AgentDock 节点", success=ok(ref("AgentDockNodeListResponse"))),
         },
@@ -1177,16 +1738,36 @@ def build_openapi(schemas: dict[str, Any]) -> dict[str, Any]:
             "delete": operation("deleteAgentDockNode", "删除 AgentDock 节点并撤销 Device Token", params=[p("RuntimeNodeId")]),
         },
         "/v1/runtime/nodes/{nodeID}/overview": {"get": operation("getRuntimeOverview", "读取指定 AgentDock 节点的 Runtime 概览", params=[p("RuntimeNodeId")])},
+        "/v1/runtime/nodes/{nodeID}/files": {
+            "get": operation(
+                "browseRuntimeFiles",
+                "分页浏览指定 AgentDock 节点当前目录的直接子项，不读取文件正文",
+                params=[
+                    p("RuntimeNodeId"),
+                    q("path", "目标节点 Host 目录路径；省略时使用 AgentDock 默认目录。"),
+                    q("offset", "目录分页偏移。", "integer", minimum=0, maximum=10000),
+                    q("limit", "单页直接子项上限。", "integer", minimum=1, maximum=500),
+                    q("include_hidden", "是否包含目标平台定义的隐藏项。", "boolean"),
+                ],
+                success=ok(ref("RuntimeFileBrowseResponse")),
+            )
+        },
         "/v1/runtime/nodes/{nodeID}/tasks": {
             "get": operation(
                 "listRuntimeTasks",
-                "列出指定 AgentDock 节点的任务",
+                "在目标 AgentDock 完成状态、搜索及时间筛选后分页列出任务",
                 params=[
                     p("RuntimeNodeId"),
-                    q("status", "按任务状态过滤；all 表示不过滤。"),
-                    q("q", "在任务 ID、标题、目标、状态和摘要中搜索。"),
-                    q("limit", "最大任务数。", "integer", minimum=1, maximum=200),
+                    q("status", "按任务状态过滤；空值或 all 表示不过滤。", enum=["", "all", "active", "completed", "blocked"]),
+                    q("q", "在任务 ID、标题、目标、状态、摘要、阻塞原因和当前步骤中搜索。"),
+                    q("time_field", "时间筛选字段；默认 updated_at。", enum=["updated_at", "created_at"], default="updated_at"),
+                    q("from", "包含此 RFC3339 时间的范围起点；须早于 to。", format="date-time"),
+                    q("to", "不包含此 RFC3339 时间的范围终点。", format="date-time"),
+                    q("offset", "筛选后的分页偏移，默认 0。", "integer", minimum=0, default=0),
+                    q("limit", "单页任务数上限，默认 200。", "integer", minimum=1, maximum=200, default=200),
                 ],
+                success=ok(ref("RuntimeTaskListResponse")),
+                additional_success={"502": error},
             )
         },
         "/v1/runtime/nodes/{nodeID}/tasks/{taskID}": {
@@ -1196,6 +1777,12 @@ def build_openapi(schemas: dict[str, Any]) -> dict[str, Any]:
         "/v1/runtime/nodes/{nodeID}/skills": {"get": operation("listRuntimeSkills", "列出指定 AgentDock 节点的 Skill", params=[p("RuntimeNodeId")])},
         "/v1/runtime/nodes/{nodeID}/skills/{source}/{skillID}": {"get": operation("getRuntimeSkill", "读取指定 AgentDock 节点的 Skill 详情", params=[p("RuntimeNodeId"), p("RuntimeSkillSource"), p("RuntimeSkillId")])},
         "/v1/runtime/nodes/{nodeID}/skills/{source}/{skillID}/files/{filePath}": {"get": operation("getRuntimeSkillFile", "读取指定 AgentDock 节点的 Skill 文件", params=[p("RuntimeNodeId"), p("RuntimeSkillSource"), p("RuntimeSkillId"), p("RuntimeSkillFilePath")])},
+        "/v1/runtime/nodes/{nodeID}/skills/{source}/{skillID}/environment": {
+            "get": operation("getRuntimeSkillEnvironment", "读取目标 AgentDock 已安装 Skill 的隔离环境变量元数据", params=[p("RuntimeNodeId"), p("RuntimeSkillSource"), p("RuntimeSkillId")], success=ok(ref("RuntimeSkillEnvironmentResponse")))
+        },
+        "/v1/runtime/nodes/{nodeID}/skills/{source}/{skillID}/manage": {
+            "post": operation("manageRuntimeSkill", "管理目标 AgentDock 已安装 Skill 的激活版本或隔离环境", params=[p("RuntimeNodeId"), p("RuntimeSkillSource"), p("RuntimeSkillId")], request=body(ref("RuntimeSkillManageRequest")), success=ok(ref("RuntimeSkillManageResponse")))
+        },
         "/v1/runtime/nodes/{nodeID}/mcp": {
             "get": operation("listRuntimeMCPServers", "列出指定 AgentDock 节点的动态 MCP 服务", params=[p("RuntimeNodeId")]),
             "post": operation("manageRuntimeMCPServer", "管理指定 AgentDock 节点的动态 MCP 服务", params=[p("RuntimeNodeId")], request=body()),

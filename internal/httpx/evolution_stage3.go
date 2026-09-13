@@ -2,6 +2,10 @@ package httpx
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -106,10 +110,11 @@ func newEvolutionStage3Timer(wait time.Duration) evolutionStage3Timer {
 
 func (s *Server) runEvolutionStage3Configured(ctx context.Context, cfg config.Config) {
 	client, err := stage3.NewClient(stage3.Config{
-		Endpoint: cfg.ModelEndpoint,
-		Model:    cfg.ModelName,
-		APIKey:   cfg.ModelAPIKey,
-		Timeout:  cfg.ModelTimeout,
+		Endpoint:     cfg.ModelEndpoint,
+		Model:        cfg.ModelName,
+		APIKey:       cfg.ModelAPIKey,
+		Timeout:      cfg.ModelTimeout,
+		SystemPrompt: cfg.ModelSystemPrompt,
 	})
 	if err != nil {
 		if s.logger != nil {
@@ -117,12 +122,12 @@ func (s *Server) runEvolutionStage3Configured(ctx context.Context, cfg config.Co
 		}
 		return
 	}
-	if err := s.runEvolutionStage3(ctx, client); err != nil && s.logger != nil {
+	if err := s.runEvolutionStage3(ctx, client, cfg.Stage3ReviewNodeID); err != nil && s.logger != nil {
 		s.logger.Warn("Stage 3 evolution run failed", "error", err)
 	}
 }
 
-func (s *Server) runEvolutionStage3(ctx context.Context, client *stage3.Client) error {
+func (s *Server) runEvolutionStage3(ctx context.Context, client *stage3.Client, reviewNodeID string) error {
 	if client == nil {
 		return fmt.Errorf("Stage 3 model client is nil")
 	}
@@ -137,10 +142,19 @@ func (s *Server) runEvolutionStage3(ctx context.Context, client *stage3.Client) 
 	if err != nil {
 		return err
 	}
-	allowedEvidence := stage3AllowedEvidence(snapshot.Tasks)
+	evidenceSources := stage3EvidenceSources(snapshot.Tasks)
 	for _, candidate := range output.Candidates {
-		candidate.EvidenceRefs = filterStage3Evidence(candidate.EvidenceRefs, allowedEvidence)
-		nodeID := stage3TargetNode(nodes, candidate.Device)
+		validRefs := filterStage3Evidence(candidate.EvidenceRefs, evidenceSources)
+		sourceNodes := stage3CandidateSourceNodes(validRefs, evidenceSources)
+		nodeID, routeReason := stage3TargetNode(nodes, candidate, reviewNodeID, sourceNodes)
+		if nodeID == "" {
+			s.recordStage3ProposalAudit(candidate, "", sourceNodes, validRefs, "skipped", routeReason)
+			if s.logger != nil {
+				s.logger.Debug("Stage 3 proposal skipped without an unambiguous review node", "candidate_type", candidate.Type, "reason", routeReason)
+			}
+			continue
+		}
+		hardEvidenceRefs := filterStage3EvidenceForNode(validRefs, evidenceSources, nodeID)
 		payload := map[string]any{
 			"intent": "propose",
 			"candidate": map[string]any{
@@ -148,15 +162,19 @@ func (s *Server) runEvolutionStage3(ctx context.Context, client *stage3.Client) 
 				"project": candidate.Project, "device": candidate.Device, "canonical_key": candidate.CanonicalKey,
 				"tags": candidate.Tags,
 			},
-			"evidence_refs": candidate.EvidenceRefs,
+			// Only references uniquely owned by the target node cross the AgentDock evidence boundary.
+			// Other valid references remain non-authoritative provenance in Nexus audit records.
+			"evidence_refs": hardEvidenceRefs,
 			"rationale":     candidate.Rationale,
 		}
 		if _, err := s.runtimePost(ctx, nodeID, "/internal/runtime/evolve", payload); err != nil {
+			s.recordStage3ProposalAudit(candidate, nodeID, sourceNodes, validRefs, "rejected", stage3RuntimeErrorCode(err))
 			if s.logger != nil {
 				s.logger.Warn("Stage 3 proposal rejected by AgentDock", "node_id", nodeID, "candidate_type", candidate.Type, "error", err)
 			}
 			continue
 		}
+		s.recordStage3ProposalAudit(candidate, nodeID, sourceNodes, validRefs, "proposed", "")
 	}
 	return nil
 }
@@ -171,7 +189,7 @@ func (s *Server) stage3Snapshot(ctx context.Context) (stage3.Snapshot, []agentdo
 	}
 	enabled := make([]agentdock.Node, 0, len(nodes))
 	for _, node := range nodes {
-		if node.Enabled {
+		if node.Enabled && nodeUsesCurrentBridgeProtocol(node) {
 			enabled = append(enabled, node)
 		}
 	}
@@ -252,29 +270,29 @@ func stage3SensitiveTags(tags []string) bool {
 	return false
 }
 
-func stage3AllowedEvidence(tasks []stage3.TaskFact) map[string]bool {
-	allowed := map[string]bool{}
+func stage3EvidenceSources(tasks []stage3.TaskFact) map[string]map[string]bool {
+	sources := map[string]map[string]bool{}
 	for _, task := range tasks {
 		prefix := "task:" + task.TaskID + ":review:" + task.ReviewRevision
-		for i := range task.VerifiedFacts {
-			allowed[fmt.Sprintf("%s:verified:%d", prefix, i)] = true
-		}
-		for i := range task.OpenRisks {
-			allowed[fmt.Sprintf("%s:risk:%d", prefix, i)] = true
-		}
-		for i := range task.MissingChecks {
-			allowed[fmt.Sprintf("%s:missing:%d", prefix, i)] = true
+		for kind, count := range map[string]int{"verified": len(task.VerifiedFacts), "risk": len(task.OpenRisks), "missing": len(task.MissingChecks)} {
+			for i := 0; i < count; i++ {
+				ref := fmt.Sprintf("%s:%s:%d", prefix, kind, i)
+				if sources[ref] == nil {
+					sources[ref] = map[string]bool{}
+				}
+				sources[ref][task.NodeID] = true
+			}
 		}
 	}
-	return allowed
+	return sources
 }
 
-func filterStage3Evidence(refs []string, allowed map[string]bool) []string {
+func filterStage3Evidence(refs []string, sources map[string]map[string]bool) []string {
 	out := make([]string, 0, len(refs))
 	seen := map[string]bool{}
 	for _, ref := range refs {
 		ref = strings.TrimSpace(ref)
-		if !allowed[ref] || seen[ref] {
+		if len(sources[ref]) == 0 || seen[ref] {
 			continue
 		}
 		seen[ref] = true
@@ -283,12 +301,100 @@ func filterStage3Evidence(refs []string, allowed map[string]bool) []string {
 	return out
 }
 
-func stage3TargetNode(nodes []agentdock.Node, device string) string {
-	device = strings.TrimSpace(device)
-	for _, node := range nodes {
-		if device != "" && strings.EqualFold(node.ID, device) {
-			return node.ID
+func stage3CandidateSourceNodes(refs []string, sources map[string]map[string]bool) []string {
+	set := map[string]bool{}
+	for _, ref := range refs {
+		for nodeID := range sources[ref] {
+			set[nodeID] = true
 		}
 	}
-	return nodes[0].ID
+	out := make([]string, 0, len(set))
+	for nodeID := range set {
+		out = append(out, nodeID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func filterStage3EvidenceForNode(refs []string, sources map[string]map[string]bool, nodeID string) []string {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		owners := sources[ref]
+		if len(owners) == 1 && owners[nodeID] {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+func stage3TargetNode(nodes []agentdock.Node, candidate stage3.Candidate, reviewNodeID string, sourceNodes []string) (string, string) {
+	candidate.Device = strings.TrimSpace(candidate.Device)
+	candidate.Scope = strings.ToLower(strings.TrimSpace(candidate.Scope))
+	if candidate.Device != "" || candidate.Scope == "device" {
+		if candidate.Device == "" {
+			return "", "device_scope_missing_node_id"
+		}
+		for _, node := range nodes {
+			if node.ID == candidate.Device && node.Enabled {
+				if len(sourceNodes) > 0 && (len(sourceNodes) != 1 || sourceNodes[0] != candidate.Device) {
+					return "", "candidate_device_evidence_mismatch"
+				}
+				return node.ID, "candidate_device"
+			}
+		}
+		return "", "candidate_device_not_enabled"
+	}
+	if len(sourceNodes) == 1 {
+		for _, node := range nodes {
+			if node.ID == sourceNodes[0] && node.Enabled {
+				return node.ID, "unique_evidence_source"
+			}
+		}
+		return "", "unique_evidence_source_not_enabled"
+	}
+	reviewNodeID = strings.TrimSpace(reviewNodeID)
+	if reviewNodeID == "" {
+		if len(sourceNodes) > 1 {
+			return "", "multiple_evidence_sources_without_review_node"
+		}
+		return "", "no_evidence_source_or_review_node"
+	}
+	for _, node := range nodes {
+		if node.ID == reviewNodeID && node.Enabled {
+			return node.ID, "configured_review_node"
+		}
+	}
+	return "", "configured_review_node_not_enabled"
+}
+
+func (s *Server) recordStage3ProposalAudit(candidate stage3.Candidate, targetNodeID string, sourceNodes, evidenceRefs []string, result, errorCode string) {
+	if s == nil || s.db == nil {
+		return
+	}
+	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
+	sourceJSON, _ := json.Marshal(sourceNodes)
+	evidenceJSON, _ := json.Marshal(evidenceRefs)
+	digest := sha256.Sum256([]byte(strings.Join([]string{createdAt, targetNodeID, candidate.Type, candidate.Scope, candidate.CanonicalKey, candidate.Statement}, "\x00")))
+	id := "s3a_" + hex.EncodeToString(digest[:16])
+	if _, err := s.db.Exec(`INSERT INTO stage3_proposal_audit(
+		id, created_at, target_node_id, candidate_type, candidate_scope, candidate_device, canonical_key,
+		source_nodes_json, evidence_refs_json, rationale, result, error_code
+	) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, createdAt, targetNodeID, candidate.Type, candidate.Scope, candidate.Device, candidate.CanonicalKey,
+		string(sourceJSON), string(evidenceJSON), stage3.RedactText(candidate.Rationale), result, errorCode); err != nil && s.logger != nil {
+		s.logger.Warn("record Stage 3 proposal audit failed", "error", err)
+	}
+}
+
+func stage3RuntimeErrorCode(err error) string {
+	var runtimeErr agentDockRuntimeError
+	if errors.As(err, &runtimeErr) {
+		if runtimeErr.UpstreamCode != "" {
+			return runtimeErr.UpstreamCode
+		}
+		if runtimeErr.Code != "" {
+			return runtimeErr.Code
+		}
+	}
+	return "runtime_error"
 }

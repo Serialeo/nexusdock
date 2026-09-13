@@ -33,8 +33,11 @@ func TestCentralWorkflowTemplateManageUsesNexusRegistry(t *testing.T) {
 	many, err := server.callWorkflowTemplateManage(t.Context(), map[string]any{
 		"action": "get_many", "template_ids": []string{"development.demo", "development.review"},
 	})
-	if err != nil || many["count"] != 2 || many["composition_required"] != true || many["next_required_action"] != workflowCompositionNextAction {
+	if err != nil || many["count"] != 2 || many["composition_required"] != true {
 		t.Fatalf("get_many=%#v err=%v", many, err)
+	}
+	if _, ok := many["next_required_action"]; ok {
+		t.Fatalf("get_many leaked next_required_action prose: %#v", many)
 	}
 	assertCentralToolResultMatchesOutputSchema(t, "workflow_template_manage", many)
 

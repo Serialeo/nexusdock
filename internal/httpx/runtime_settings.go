@@ -1,8 +1,11 @@
 package httpx
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/uvwt/nexusdock/internal/config"
@@ -10,6 +13,16 @@ import (
 	"github.com/uvwt/nexusdock/internal/settings"
 	"github.com/uvwt/nexusdock/internal/stage3"
 )
+
+func revisionIfMatch(r *http.Request) string {
+	value := strings.TrimSpace(r.Header.Get("If-Match"))
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		if unquoted, err := strconv.Unquote(value); err == nil {
+			return unquoted
+		}
+	}
+	return value
+}
 
 type runtimeAITestResult struct {
 	OK        bool   `json:"ok"`
@@ -29,6 +42,8 @@ func (s *Server) getRuntimeAISettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "SETTINGS_READ_FAILED", err.Error())
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("ETag", `"`+view.Revision+`"`)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "settings": view})
 }
 
@@ -41,18 +56,61 @@ func (s *Server) updateRuntimeAISettings(w http.ResponseWriter, r *http.Request)
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	cfg, view, err := s.settings.Update(r.Context(), request)
-	if err != nil {
-		var validation settings.ValidationError
-		if errors.As(err, &validation) {
-			writeError(w, http.StatusBadRequest, "INVALID_RUNTIME_SETTINGS", validation.Error())
+	if request.ExpectedRevision == "" {
+		request.ExpectedRevision = revisionIfMatch(r)
+	}
+	if reviewNodeID := strings.TrimSpace(request.Stage3.ReviewNodeID); reviewNodeID != "" {
+		_, current, err := s.settings.Load(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "SETTINGS_READ_FAILED", err.Error())
 			return
 		}
+		// A review node can become disabled or be deleted after it was saved. Keeping that stale
+		// reference while changing unrelated AI settings is allowed: Stage 3 routing treats it as
+		// unavailable and never falls back. Selecting a new review node still requires an enabled node.
+		if reviewNodeID != current.Stage3.ReviewNodeID {
+			if s.agentDock == nil {
+				writeError(w, http.StatusBadRequest, "INVALID_RUNTIME_SETTINGS", "Stage 3 review node 不可用")
+				return
+			}
+			node, err := s.agentDock.Get(r.Context(), reviewNodeID)
+			if err != nil || !node.Enabled {
+				writeError(w, http.StatusBadRequest, "INVALID_RUNTIME_SETTINGS", "Stage 3 review_node_id 必须引用已启用的 AgentDock 节点")
+				return
+			}
+		}
+	}
+	if _, _, err := s.settings.Update(r.Context(), request); err != nil {
+		var validation settings.ValidationError
+		switch {
+		case errors.Is(err, settings.ErrRevisionConflict):
+			writeError(w, http.StatusPreconditionFailed, "RUNTIME_SETTINGS_REVISION_CONFLICT", "AI 设置已被其他编辑器更新，请重新读取后再保存")
+		case errors.As(err, &validation):
+			writeError(w, http.StatusBadRequest, "INVALID_RUNTIME_SETTINGS", validation.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "SETTINGS_UPDATE_FAILED", err.Error())
+		}
+		return
+	}
+	_, view, err := s.applyCurrentRuntimeAISettings(r.Context())
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "SETTINGS_UPDATE_FAILED", err.Error())
 		return
 	}
-	s.applyRuntimeAIConfig(cfg)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("ETag", `"`+view.Revision+`"`)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "settings": view})
+}
+
+func (s *Server) applyCurrentRuntimeAISettings(ctx context.Context) (config.Config, settings.View, error) {
+	s.aiApplyMu.Lock()
+	defer s.aiApplyMu.Unlock()
+	cfg, view, err := s.settings.Load(ctx)
+	if err != nil {
+		return config.Config{}, settings.View{}, err
+	}
+	s.applyRuntimeAIConfig(cfg)
+	return cfg, view, nil
 }
 
 func (s *Server) testStage3Connection(w http.ResponseWriter, r *http.Request) {
@@ -60,10 +118,11 @@ func (s *Server) testStage3Connection(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	result := runtimeAITestResult{Target: "stage3", Model: cfg.ModelName}
 	client, err := stage3.NewClient(stage3.Config{
-		Endpoint: cfg.ModelEndpoint,
-		Model:    cfg.ModelName,
-		APIKey:   cfg.ModelAPIKey,
-		Timeout:  cfg.ModelTimeout,
+		Endpoint:     cfg.ModelEndpoint,
+		Model:        cfg.ModelName,
+		APIKey:       cfg.ModelAPIKey,
+		Timeout:      cfg.ModelTimeout,
+		SystemPrompt: cfg.ModelSystemPrompt,
 	})
 	if err == nil {
 		err = client.Probe(r.Context())

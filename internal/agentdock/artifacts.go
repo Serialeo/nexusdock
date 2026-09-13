@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	protocol "github.com/uvwt/agentdock-protocol"
+	protocol "github.com/Serialeo/agentdock-protocol"
 )
 
 // ArtifactChunk 是 AgentDock 私有 artifact.read Bridge 操作在 Nexus 边界内的强类型结果。

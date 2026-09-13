@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
+	protocol "github.com/Serialeo/agentdock-protocol"
 	"github.com/gorilla/websocket"
-	protocol "github.com/uvwt/agentdock-protocol"
 	"github.com/uvwt/nexusdock/internal/agentdock"
 	"github.com/uvwt/nexusdock/internal/config"
 )

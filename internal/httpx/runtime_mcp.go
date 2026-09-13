@@ -25,7 +25,7 @@ type runtimeMCPRequest struct {
 	Enabled     *bool             `json:"enabled,omitempty"`
 	TimeoutMS   int               `json:"timeout_ms,omitempty"`
 	Key         string            `json:"key,omitempty"`
-	Value       string            `json:"value,omitempty"`
+	Value       *string           `json:"value,omitempty"`
 }
 
 func (s *Server) registerRuntimeMCPRoutes(mux *http.ServeMux, protected func(http.HandlerFunc) http.HandlerFunc) {

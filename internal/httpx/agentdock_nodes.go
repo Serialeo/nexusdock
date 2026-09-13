@@ -1,12 +1,14 @@
 package httpx
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/uvwt/nexusdock/internal/agentdock"
 	"github.com/uvwt/nexusdock/internal/core"
+	projectstore "github.com/uvwt/nexusdock/internal/project"
 )
 
 func (s *Server) registerAgentDockNodeRoutes(mux *http.ServeMux, protected func(http.HandlerFunc) http.HandlerFunc) {
@@ -84,19 +86,7 @@ func (s *Server) agentDockNodeConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	token := bearerToken(r.Header.Get("Authorization"))
 	principal, err := s.auth.Authenticate(r.Context(), token)
-	if err != nil {
-		switch core.ErrorCodeOf(err) {
-		case core.CodeAuthRequired, core.CodeInvalidToken, core.CodeTokenRevoked:
-			writeError(w, http.StatusUnauthorized, "INVALID_DEVICE_TOKEN", "AgentDock Device Token 无效")
-		default:
-			if s.logger != nil {
-				s.logger.Error("验证 AgentDock Device Token 失败", "request_id", requestIDFromContext(r.Context()), "error", err)
-			}
-			writeError(w, http.StatusInternalServerError, "AGENTDOCK_DEVICE_AUTH_FAILED", "无法验证 AgentDock Device Token")
-		}
-		return
-	}
-	if principal.Actor.Type != core.ActorDevice || principal.TokenKind != "device_token" {
+	if err != nil || principal.Actor.Type != core.ActorDevice || principal.TokenKind != "device_token" {
 		writeError(w, http.StatusUnauthorized, "INVALID_DEVICE_TOKEN", "AgentDock Device Token 无效")
 		return
 	}
@@ -131,6 +121,11 @@ func (s *Server) agentDockNodeUpdate(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
+	previous, err := s.agentDock.Get(r.Context(), r.PathValue("nodeID"))
+	if err != nil {
+		writeAgentDockNodeError(w, err)
+		return
+	}
 	node, err := s.agentDock.Update(r.Context(), r.PathValue("nodeID"), request)
 	if err != nil {
 		writeAgentDockNodeError(w, err)
@@ -149,7 +144,44 @@ func (s *Server) agentDockNodeUpdate(w http.ResponseWriter, r *http.Request) {
 			s.reconcileNodeToolContracts(toolDescriptorNames(descriptors))
 		}
 	}
+	if request.FullAccess != nil && previous.FullAccess != node.FullAccess {
+		s.reapplyProjectDeploymentsForNodeAccessChange(r.Context(), node.ID)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": node})
+}
+
+func (s *Server) reapplyProjectDeploymentsForNodeAccessChange(ctx context.Context, nodeID string) {
+	if s.projects == nil {
+		return
+	}
+	deployments, err := s.projects.ListDeploymentsForNode(ctx, nodeID)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("读取 Full Access 受影响的 Project Deployments 失败", "node_id", nodeID, "error", err)
+		}
+		return
+	}
+	for _, deployment := range deployments {
+		updated, updateErr := s.projects.UpdateDeployment(ctx, deployment.ProjectID, deployment.ID, projectstore.UpdateDeploymentInput{
+			ExpectedRevision: deployment.DesiredRevision,
+			WorkingFolder:    deployment.WorkingFolder,
+			Role:             deployment.Role,
+			Purpose:          deployment.Purpose,
+			Permissions:      deployment.Permissions,
+			Enabled:          deployment.Enabled,
+		})
+		if updateErr != nil {
+			if s.logger != nil {
+				s.logger.Warn("更新 Full Access Deployment revision 失败", "node_id", nodeID, "deployment_id", deployment.ID, "error", updateErr)
+			}
+			continue
+		}
+		revoked, revokeErr := s.projects.RevokeTargetsForDeployment(ctx, updated.ID, "Node Full Access changed")
+		if revokeErr == nil {
+			s.revokeProjectTargetsOnNodes(ctx, revoked)
+		}
+		s.tryApplyProjectDeployment(ctx, updated)
+	}
 }
 
 func (s *Server) agentDockNodeDelete(w http.ResponseWriter, r *http.Request) {

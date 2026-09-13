@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
+	protocol "github.com/Serialeo/agentdock-protocol"
 	"github.com/gorilla/websocket"
-	protocol "github.com/uvwt/agentdock-protocol"
 	"github.com/uvwt/nexusdock/internal/core"
 )
 
@@ -135,6 +135,14 @@ func (h *Hub) Accept(w http.ResponseWriter, r *http.Request, nodeID string) erro
 }
 
 func (h *Hub) Invoke(ctx context.Context, nodeID, operation string, arguments any) (map[string]any, error) {
+	return h.invoke(ctx, nodeID, operation, nil, arguments)
+}
+
+func (h *Hub) InvokeWithExecutionContext(ctx context.Context, nodeID, operation string, executionContext *protocol.ExecutionContext, arguments any) (map[string]any, error) {
+	return h.invoke(ctx, nodeID, operation, executionContext, arguments)
+}
+
+func (h *Hub) invoke(ctx context.Context, nodeID, operation string, executionContext *protocol.ExecutionContext, arguments any) (map[string]any, error) {
 	h.mu.RLock()
 	connection := h.nodes[nodeID]
 	h.mu.RUnlock()
@@ -158,7 +166,7 @@ func (h *Hub) Invoke(ctx context.Context, nodeID, operation string, arguments an
 	}
 	defer connection.removePending(requestID)
 
-	if err := connection.write(connectionMessage{Type: protocol.MessageToolInvoke, RequestID: requestID, Operation: operation, Arguments: encoded}); err != nil {
+	if err := connection.write(connectionMessage{Type: protocol.MessageToolInvoke, RequestID: requestID, Operation: operation, ExecutionContext: executionContext, Arguments: encoded}); err != nil {
 		connection.close(err)
 		return nil, ErrNodeDisconnected
 	}

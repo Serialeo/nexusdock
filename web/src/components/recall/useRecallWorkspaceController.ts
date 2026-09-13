@@ -1,18 +1,16 @@
 import { useEffect, useMemo, useReducer, useRef, type FormEvent } from 'react';
-import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import { clearRecallDraft, loadRecallDraft, saveRecallDraft } from '../../lib/drafts';
 import { initialRecallState, recallReducer } from './recallState';
 import type {
-  EmbeddingSearchResponse, EmbeddingStatus, Recall, RecallCardSummary, RecallEntry, RecallWorkspaceViewModel
+  EmbeddingSearchResponse, EmbeddingStatus, GitCommit, GitDiff, Recall, RecallCardSummary, RecallEntry, RecallWorkspaceViewModel
 } from './types';
 import {
-  createNewRecallTemplate, initialPath, usesSinglePaneRecallLayout,
+  NEW_RECALL_TEMPLATE, initialPath, usesSinglePaneRecallLayout,
   messageOf, nameOf, normalizePath, updateRoute,
 } from './utils';
 
 export function useRecallWorkspaceController(refreshToken: number): RecallWorkspaceViewModel {
-  const { t, i18n } = useTranslation();
   const [state, dispatch] = useReducer(recallReducer, undefined, initialRecallState);
   const editorRef = useRef<HTMLElement | null>(null);
   const refreshAllRef = useRef<(path?: string) => Promise<void>>(async () => undefined);
@@ -25,11 +23,11 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
 
   const fileEntries = useMemo(() => {
     const files = state.entries.filter((entry) => entry.type === 'file');
-    return state.appliedQuery ? files : files.sort((a, b) => a.path.localeCompare(b.path, i18n.resolvedLanguage || i18n.language));
-  }, [i18n.language, i18n.resolvedLanguage, state.appliedQuery, state.entries]);
+    return state.appliedQuery ? files : files.sort((a, b) => a.path.localeCompare(b.path, 'zh-CN'));
+  }, [state.appliedQuery, state.entries]);
   const libraryFileEntries = useMemo(
-    () => state.libraryEntries.filter((entry) => entry.type === 'file').sort((a, b) => a.path.localeCompare(b.path, i18n.resolvedLanguage || i18n.language)),
-    [i18n.language, i18n.resolvedLanguage, state.libraryEntries],
+    () => state.libraryEntries.filter((entry) => entry.type === 'file').sort((a, b) => a.path.localeCompare(b.path, 'zh-CN')),
+    [state.libraryEntries],
   );
   const libraryFileCount = libraryFileEntries.length;
   const directoryCount = useMemo(() => {
@@ -44,6 +42,8 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
     }
     return directories.size;
   }, [libraryFileEntries]);
+  const changedCount = state.gitDiff?.files?.length ?? 0;
+  const dirty = Boolean(state.gitDiff?.dirty);
   const hasUnsavedChanges = state.editing && (state.draftPath !== (state.current?.path || '') || state.draftContent !== (state.current?.content || ''));
   const detailOpen = Boolean(state.current || state.editing);
   draftSnapshotRef.current = { editing: state.editing, path: state.draftPath, content: state.draftContent };
@@ -129,6 +129,16 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
     }
   }
 
+  async function loadVersionState() {
+    const gitDiff = await api<GitDiff>('/v1/git/diff');
+    dispatch({ type: 'gitDiff', gitDiff });
+  }
+
+  async function loadHistory() {
+    const response = await api<{ commits: GitCommit[] }>('/v1/git/log?limit=12');
+    dispatch({ type: 'commits', commits: response.commits || [] });
+  }
+
   async function loadEmbeddingStatus() {
     const response = await api<EmbeddingStatus>('/v1/embeddings/status');
     dispatch({ type: 'embedding:status', status: response });
@@ -158,13 +168,13 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
 
   function blockIfRecoveryPending(): boolean {
     if (!state.draftAvailable || state.editing) return false;
-    dispatch({ type: 'notice', notice: { text: t('Please restore or discard the detected draft first.'), danger: true } });
+    dispatch({ type: 'notice', notice: { text: '请先恢复或丢弃检测到的草稿。', danger: true } });
     return true;
   }
 
   function blockIfUnsaved(): boolean {
     if (!hasUnsavedChanges) return false;
-    dispatch({ type: 'notice', notice: { text: t('Please save or cancel the current edit first.'), danger: true } });
+    dispatch({ type: 'notice', notice: { text: '请先保存或取消当前编辑。', danger: true } });
     return true;
   }
 
@@ -180,7 +190,7 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
     const loadingID = ++loadingRequestRef.current;
     dispatch({ type: 'load:start' });
     try {
-      const [entriesCurrent] = await Promise.all([refreshEntries(), loadEmbeddingStatus()]);
+      const [entriesCurrent] = await Promise.all([refreshEntries(), loadVersionState(), loadHistory(), loadEmbeddingStatus()]);
       if (path && entriesCurrent && loadingID === loadingRequestRef.current) {
         try {
           await openRecall(path);
@@ -240,7 +250,7 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
     if (blockIfUnsaved() || blockIfRecoveryPending()) return;
     dispatch({ type: 'notice', notice: null });
     detailRequestRef.current += 1;
-    dispatch({ type: 'newDraft', path: 'inbox/new-recall.md', content: createNewRecallTemplate(t('New recall entry')) });
+    dispatch({ type: 'newDraft', path: 'inbox/new-recall.md', content: NEW_RECALL_TEMPLATE });
     revealCompactEditor();
   }
 
@@ -274,7 +284,7 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
         ? (await api<{ recall: Recall }>(`/v1/recall/${encodeURIComponent(path)}`)).recall
         : undefined;
       dispatch({ type: 'restoreDraft', path, content: saved.content, current });
-      dispatch({ type: 'notice', notice: { text: current ? t('Restored edit draft for existing file') : t('Restored new entry draft') } });
+      dispatch({ type: 'notice', notice: { text: current ? '已恢复已有文件的编辑草稿' : '已恢复新建草稿' } });
       revealCompactEditor();
     } catch (reason) {
       dispatch({ type: 'notice', notice: { text: messageOf(reason), danger: true } });
@@ -286,11 +296,11 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
   async function saveRecall() {
     const path = normalizePath(state.draftPath);
     if (!path || !state.draftContent.trim()) {
-      dispatch({ type: 'notice', notice: { text: t('Path and content cannot be empty'), danger: true } });
+      dispatch({ type: 'notice', notice: { text: '路径和内容不能为空', danger: true } });
       return;
     }
     if (!/\.(md|markdown|txt)$/i.test(path)) {
-      dispatch({ type: 'notice', notice: { text: t('Recall files must use .md, .markdown, or .txt extension'), danger: true } });
+      dispatch({ type: 'notice', notice: { text: '召回文件必须使用 .md、.markdown 或 .txt 扩展名', danger: true } });
       return;
     }
     dispatch({ type: 'busy', busy: true });
@@ -303,9 +313,9 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
       });
       clearRecallDraft();
       dispatch({ type: 'draftAvailable', available: false });
-      await refreshEntries();
+      await Promise.all([refreshEntries(), loadVersionState(), loadHistory()]);
       await openRecall(response.recall.path);
-      dispatch({ type: 'notice', notice: { text: t('Recall entry saved') } });
+      dispatch({ type: 'notice', notice: { text: '召回内容已保存' } });
     } catch (reason) {
       dispatch({ type: 'notice', notice: { text: messageOf(reason), danger: true } });
     } finally {
@@ -318,11 +328,11 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
     if (!pending || pending.kind !== 'move') return;
     const normalized = normalizePath(pending.nextPath);
     if (!normalized || normalized === pending.path) {
-      dispatch({ type: 'pendingError', error: t('Please enter a new recall path.') });
+      dispatch({ type: 'pendingError', error: '请输入新的召回路径。' });
       return;
     }
     if (!/\.(md|markdown|txt)$/i.test(normalized)) {
-      dispatch({ type: 'pendingError', error: t('Target path must be a Markdown or text file.') });
+      dispatch({ type: 'pendingError', error: '目标路径必须是 Markdown 或文本文件。' });
       return;
     }
     dispatch({ type: 'busy', busy: true });
@@ -334,7 +344,7 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
       dispatch({ type: 'pending', pendingAction: null });
       await refreshEntries();
       await openRecall(response.recall.path);
-      dispatch({ type: 'notice', notice: { text: t('Recall entry moved') } });
+      dispatch({ type: 'notice', notice: { text: '召回内容已移动' } });
     } catch (reason) {
       dispatch({ type: 'pendingError', error: messageOf(reason) });
     } finally {
@@ -352,8 +362,8 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
       dispatch({ type: 'pending', pendingAction: null });
       dispatch({ type: 'clearSelection' });
       updateRoute('', state.appliedQuery);
-      await refreshEntries();
-      dispatch({ type: 'notice', notice: { text: t('Recall entry deleted') } });
+      await Promise.all([refreshEntries(), loadVersionState(), loadHistory()]);
+      dispatch({ type: 'notice', notice: { text: '召回内容已删除' } });
     } catch (reason) {
       dispatch({ type: 'pendingError', error: messageOf(reason) });
     } finally {
@@ -370,7 +380,7 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
         timeoutMs: 120_000,
       });
       await loadEmbeddingStatus();
-      dispatch({ type: 'notice', notice: { text: t('Cards vector index rebuilt.') } });
+      dispatch({ type: 'notice', notice: { text: 'cards 向量索引已重建。' } });
     } catch (reason) {
       dispatch({ type: 'notice', notice: { text: messageOf(reason), danger: true } });
     } finally {
@@ -382,7 +392,7 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
     event?.preventDefault();
     const text = state.embedding.query.trim() || state.query.trim();
     if (!text) {
-      dispatch({ type: 'notice', notice: { text: t('Please enter an experience query to search.'), danger: true } });
+      dispatch({ type: 'notice', notice: { text: '请输入要搜索的经验问题。', danger: true } });
       return;
     }
     dispatch({ type: 'busy', busy: true });
@@ -392,7 +402,20 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
         body: JSON.stringify({ query: text, prefix: 'recall/managed/cards', max_results: 8 }),
       });
       dispatch({ type: 'embedding:results', results: response.results || [] });
-      dispatch({ type: 'notice', notice: { text: t('Vector search returned {{count}} results.', { count: response.count ?? response.results?.length ?? 0 }) } });
+      dispatch({ type: 'notice', notice: { text: `向量搜索返回 ${response.count ?? response.results?.length ?? 0} 条结果。` } });
+    } catch (reason) {
+      dispatch({ type: 'notice', notice: { text: messageOf(reason), danger: true } });
+    } finally {
+      dispatch({ type: 'busy', busy: false });
+    }
+  }
+
+  async function recordVersion() {
+    dispatch({ type: 'busy', busy: true });
+    try {
+      const response = await api<{ created: boolean }>('/v1/git/commit', { method: 'POST', body: '{}' });
+      await Promise.all([loadVersionState(), loadHistory()]);
+      dispatch({ type: 'notice', notice: { text: response.created ? '已记录本地版本' : '没有需要记录的本地变更' } });
     } catch (reason) {
       dispatch({ type: 'notice', notice: { text: messageOf(reason), danger: true } });
     } finally {
@@ -406,6 +429,12 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
     void refreshAll();
   }
 
+  function recordVersionFromUI() {
+    if (blockIfUnsaved()) return;
+    dispatch({ type: 'notice', notice: null });
+    void recordVersion();
+  }
+
   useEffect(() => {
     if (externalRefreshTokenRef.current === refreshToken) return;
     externalRefreshTokenRef.current = refreshToken;
@@ -414,6 +443,7 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
 
   const actions = {
     refreshAll: refreshAllFromUI,
+    recordVersion: recordVersionFromUI,
     restoreDraft: () => { void restoreDraft(); },
     discardDraft: () => dispatch({ type: 'draftAvailable', available: false }),
     clearNotice: () => dispatch({ type: 'notice', notice: null }),
@@ -440,5 +470,5 @@ export function useRecallWorkspaceController(refreshToken: number): RecallWorksp
     reindexCards: () => { void reindexCards(); },
   };
 
-  return { state, fileEntries, libraryFileCount, directoryCount, hasUnsavedChanges, detailOpen, editorRef, actions };
+  return { state, fileEntries, libraryFileCount, directoryCount, changedCount, dirty, hasUnsavedChanges, detailOpen, editorRef, actions };
 }

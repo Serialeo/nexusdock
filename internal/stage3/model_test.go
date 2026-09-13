@@ -37,6 +37,50 @@ func TestGenerateRedactsSnapshotAndRejectsLifecycleAuthority(t *testing.T) {
 	}
 }
 
+func TestGenerateUsesEffectiveSystemPrompt(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+		want   string
+	}{
+		{name: "bundled default", want: BundledDefaultPrompt()},
+		{name: "custom override", prompt: "Custom system prompt.\nUse exactly this text.  ", want: "Custom system prompt.\nUse exactly this text.  "},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var gotPrompt string
+			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Messages []struct {
+						Role    string `json:"role"`
+						Content string `json:"content"`
+					} `json:"messages"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					return
+				}
+				if len(body.Messages) > 0 && body.Messages[0].Role == "system" {
+					gotPrompt = body.Messages[0].Content
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": `{"candidates":[]}`}}}})
+			}))
+			defer model.Close()
+
+			client, err := NewClient(Config{Endpoint: model.URL, Model: "test", SystemPrompt: test.prompt})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Generate(t.Context(), Snapshot{Tasks: []TaskFact{{TaskID: "tsk_prompt", Title: "x", Goal: "y"}}}); err != nil {
+				t.Fatal(err)
+			}
+			if gotPrompt != test.want {
+				t.Fatalf("system prompt = %q, want %q", gotPrompt, test.want)
+			}
+		})
+	}
+}
+
 func TestGenerateRejectsModelLifecycleFields(t *testing.T) {
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": `{"candidates":[{"type":"runbook","statement":"x","status":"verified"}]}`}}}})

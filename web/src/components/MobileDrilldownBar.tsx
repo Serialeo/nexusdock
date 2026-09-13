@@ -1,5 +1,4 @@
 import { ArrowLeft } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
 
 type MobileDrilldownBarProps = {
   label: string;
@@ -10,9 +9,8 @@ type MobileDrilldownBarProps = {
 };
 
 export default function MobileDrilldownBar({ label, title, meta, backLabel, onBack }: MobileDrilldownBarProps) {
-  const { t } = useTranslation();
   return <header className="mobile-drilldown-bar">
-    <button type="button" onClick={onBack} aria-label={backLabel || t('Back to {{label}} list', { label })}><ArrowLeft size={18} /></button>
+    <button type="button" onClick={onBack} aria-label={backLabel || `返回${label}列表`}><ArrowLeft size={18} /></button>
     <div><span>{label}</span><strong>{title}</strong></div>
     {meta && <em>{meta}</em>}
   </header>;

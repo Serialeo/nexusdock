@@ -103,11 +103,14 @@ type opsSkillFileContent struct {
 func (s *Server) registerRuntimeRoutes(mux *http.ServeMux, protected func(http.HandlerFunc) http.HandlerFunc) {
 	s.registerAgentDockNodeRoutes(mux, protected)
 	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/overview", protected(s.runtimeOverview))
+	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/files", protected(s.runtimeFiles))
 	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/tasks", protected(s.runtimeTasks))
 	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/tasks/{fileName}", protected(s.runtimeTaskDetail))
 	mux.HandleFunc("DELETE /v1/runtime/nodes/{nodeID}/tasks/{fileName}", protected(s.runtimeDeleteTask))
 	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/skills", protected(s.runtimeSkills))
 	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/skills/{source}/{skillID}/files/{filePath...}", protected(s.runtimeSkillFile))
+	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/skills/{source}/{skillID}/environment", protected(s.runtimeSkillEnvironment))
+	mux.HandleFunc("POST /v1/runtime/nodes/{nodeID}/skills/{source}/{skillID}/manage", protected(s.runtimeSkillManage))
 	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/skills/{source}/{skillID}", protected(s.runtimeSkillDetail))
 	s.registerRuntimeMCPRoutes(mux, protected)
 }
@@ -146,39 +149,6 @@ func (s *Server) runtimeOverview(w http.ResponseWriter, r *http.Request) {
 func taskUpdatedSince(value string, cutoff time.Time) bool {
 	updatedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
 	return err == nil && !updatedAt.Before(cutoff)
-}
-
-func (s *Server) runtimeTasks(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.PathValue("nodeID")
-	status := strings.TrimSpace(r.URL.Query().Get("status"))
-	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
-	limit := queryInt(r, "limit", runtimeTaskListLimit)
-	if limit > runtimeTaskListLimit {
-		limit = runtimeTaskListLimit
-	}
-	items, err := s.collectOpsTasksFromRuntime(r.Context(), nodeID, limit)
-	if err != nil {
-		writeJSON(w, runtimeErrorHTTPStatus(err), runtimeUnavailablePayload(err))
-		return
-	}
-	filtered := make([]opsTaskSummary, 0, len(items))
-	for _, item := range items {
-		if status != "" && status != "all" && item.Status != status {
-			continue
-		}
-		currentStep := ""
-		if item.CurrentStep != nil {
-			currentStep = item.CurrentStep.Title
-		}
-		if query != "" && !strings.Contains(strings.ToLower(strings.Join([]string{item.ID, item.Title, item.Goal, item.Status, item.Summary, item.Blocker, currentStep}, " ")), query) {
-			continue
-		}
-		filtered = append(filtered, item)
-		if len(filtered) >= limit {
-			break
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node_id": nodeID, "items": filtered, "count": len(filtered), "total": len(items), "source": "agentdock-runtime-api"})
 }
 
 func (s *Server) runtimeTaskDetail(w http.ResponseWriter, r *http.Request) {

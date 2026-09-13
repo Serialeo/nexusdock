@@ -1,6 +1,6 @@
 package agentdock
 
-import protocol "github.com/uvwt/agentdock-protocol"
+import protocol "github.com/Serialeo/agentdock-protocol"
 
 const ConnectionProtocolVersion = protocol.ConnectionProtocolVersion
 

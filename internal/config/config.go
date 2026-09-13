@@ -34,6 +34,8 @@ type Config struct {
 	ModelEndpoint         string
 	ModelName             string
 	ModelAPIKey           string
+	ModelSystemPrompt     string
+	Stage3ReviewNodeID    string
 	ModelTimeout          time.Duration
 	EvolutionInterval     time.Duration
 }

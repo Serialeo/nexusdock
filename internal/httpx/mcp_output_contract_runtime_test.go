@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Serialeo/agentdock-protocol/mcpcontract"
 	jsonschema "github.com/google/jsonschema-go/jsonschema"
-	"github.com/uvwt/agentdock-protocol/mcpcontract"
 	"github.com/uvwt/nexusdock/internal/privatenotes"
 	"github.com/uvwt/nexusdock/internal/recall"
 )

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	mcpcontract "github.com/Serialeo/agentdock-protocol/mcpcontract"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/uvwt/nexusdock/internal/agentdock"
 )
@@ -18,13 +19,16 @@ type centralOutputContractCoverageEntry struct {
 // Nexus 只负责自己生成 structuredContent 的中央工具契约。
 // 节点工具由 AgentDock 负责 runtime contract，Nexus 这里只验证代理层保持 outputSchema 与结果透明。
 var centralOutputContractCoverageInventory = map[string]centralOutputContractCoverageEntry{
-	"agentdock_context":        {Variants: []string{"success"}},
-	"recall_search":            {Variants: []string{"success"}},
-	"recall_read":              {Variants: []string{"success"}},
-	"recall_write":             {Variants: []string{"plan", "create", "replace", "append", "patch", "update_fact", "diff", "delete"}},
-	"recall_maintain":          {Variants: []string{"list", "lint", "embedding_status"}},
-	"private_note_manage":      {Variants: []string{"search", "read", "write", "delete", "status", "maintain"}},
-	"workflow_template_manage": {Variants: []string{"publish", "retire", "list", "get", "get_many", "match", "vector_index"}},
+	"agentdock_context":            {Variants: []string{"success"}},
+	mcpcontract.ToolProjectList:    {Variants: []string{"success"}},
+	mcpcontract.ToolProjectOpen:    {Variants: []string{"success"}},
+	mcpcontract.ToolProjectContext: {Variants: []string{"success"}},
+	"recall_search":                {Variants: []string{"success"}},
+	"recall_read":                  {Variants: []string{"success"}},
+	"recall_write":                 {Variants: []string{"plan", "create", "replace", "append", "patch", "update_fact", "diff", "delete"}},
+	"recall_maintain":              {Variants: []string{"list", "lint", "embedding_status"}},
+	"private_note_manage":          {Variants: []string{"search", "read", "write", "delete", "status", "maintain"}},
+	"workflow_template_manage":     {Variants: []string{"publish", "retire", "list", "get", "get_many", "match", "vector_index"}},
 }
 
 func TestCentralOutputContractCoverageMatchesPublishedTools(t *testing.T) {

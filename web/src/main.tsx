@@ -1,5 +1,4 @@
 import { createRoot } from 'react-dom/client';
-import './i18n';
 import App from './App';
 import { LoginPage } from './Auth';
 import CredentialUpdatePage from './CredentialUpdatePage';

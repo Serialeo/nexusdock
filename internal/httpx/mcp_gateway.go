@@ -11,39 +11,35 @@ import (
 	"regexp"
 	"strings"
 
+	protocol "github.com/Serialeo/agentdock-protocol"
+	"github.com/Serialeo/agentdock-protocol/mcpcontract"
+	googlejsonschema "github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	protocol "github.com/uvwt/agentdock-protocol"
-	"github.com/uvwt/agentdock-protocol/mcpcontract"
 	"github.com/uvwt/nexusdock/internal/agentdock"
 	"github.com/uvwt/nexusdock/internal/privatenotes"
+	projectstore "github.com/uvwt/nexusdock/internal/project"
 	"github.com/uvwt/nexusdock/internal/recall"
 )
 
-const nexusServerInstructions = "NexusDock 可以连接并统一操作多台 AgentDock 设备。" +
-	"优先调用 `agentdock_context` 获取可用设备、节点标识以及各设备的核心能力、Skill、动态 MCP、Workflow 模板、重要上下文和长期记忆索引。" +
-	"需要操作具体设备时，根据 `agentdock_context` 返回的节点信息选择目标 `node_id`。" +
-	"需要查找或读取长期记忆时使用 `recall_*`；需要查找或使用 Workflow 模板时使用 `workflow_template_manage`；" +
-	"处理多步骤任务时使用 `task_manage` 记录和维护任务进度。根据用户需求选择合适的设备和能力，检查、操作并验证设备状态。"
-
 func (s *Server) initializeMCPGateway() {
-	s.mcpServer = mcpsdk.NewServer(
-		&mcpsdk.Implementation{Name: "nexusdock", Version: "1"},
-		&mcpsdk.ServerOptions{
-			Capabilities: &mcpsdk.ServerCapabilities{},
-			Instructions: nexusServerInstructions,
-		},
-	)
+	// Bridge v4 Project Prompt is the only repository-instruction channel used for
+	// Project execution. Legacy Nexus Global/Node Instructions are intentionally
+	// not injected into the MCP server prompt.
+	s.mcpServer = s.newMCPServer()
 	s.registerCentralTools()
 	if s.agentDockHub != nil {
-		s.agentDockHub.SetHelloHandler(s.registerNodeTools)
+		s.agentDockHub.SetHelloHandler(s.handleAgentDockHello)
 	}
 	if s.agentDock != nil {
 		ctx := context.Background()
-		if err := s.loadPublishedNodeTools(ctx); err != nil && s.logger != nil {
-			s.logger.Warn("恢复 AgentDock 公开工具契约失败", "error", err)
+		if err := s.resetPersistedNodeToolCatalog(ctx); err != nil && s.logger != nil {
+			s.logger.Warn("清理上一协议 generation 的 AgentDock 工具发布缓存失败", "error", err)
 		}
 		if nodes, err := s.agentDock.List(ctx); err == nil {
 			for _, node := range nodes {
+				if !nodeUsesCurrentBridgeProtocol(node) {
+					continue
+				}
 				descriptors, descriptorErr := s.agentDock.ToolDescriptors(ctx, node.ID)
 				if descriptorErr == nil {
 					s.registerNodeTools(node, agentdock.Hello{Tools: descriptors})
@@ -56,30 +52,66 @@ func (s *Server) initializeMCPGateway() {
 	// Nexus 自有的 Context / Recall / Workflow Apps 不依赖任何 AgentDock 节点，启动时始终注册。
 	s.syncMCPAppResources()
 	s.mcpHandler = mcpsdk.NewStreamableHTTPHandler(
-		func(*http.Request) *mcpsdk.Server { return s.mcpServer },
+		func(*http.Request) *mcpsdk.Server { return s.currentMCPServer() },
 		&mcpsdk.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 1 << 20, PropagateRequestCancellation: true},
 	)
 }
 
+func (s *Server) newMCPServer() *mcpsdk.Server {
+	return mcpsdk.NewServer(
+		&mcpsdk.Implementation{Name: "nexusdock", Version: "1"},
+		&mcpsdk.ServerOptions{Capabilities: &mcpsdk.ServerCapabilities{}},
+	)
+}
+
 func (s *Server) registerCentralTools() {
-	if s == nil || s.mcpServer == nil {
+	s.registerCentralToolsOn(s.currentMCPServer())
+}
+
+func (s *Server) registerCentralToolsOn(server *mcpsdk.Server) {
+	if s == nil || server == nil {
 		return
 	}
 	for _, definition := range nexusToolDefinitionsWithApps(s.mcpAppsEnabled()) {
 		definition := definition
-		s.mcpServer.AddTool(definition, func(ctx context.Context, request *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		server.AddTool(definition, func(ctx context.Context, request *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 			arguments, err := toolArguments(request)
 			if err != nil {
 				return nil, err
 			}
+			if isProjectContextTool(definition.Name) {
+				ackResult, ackErr := s.consumeProjectContextAck(ctx, request)
+				if ackErr != nil {
+					response, responseErr := s.gatewayToolResult(definition.Name, ackResult, ackErr)
+					if responseErr == nil && response != nil {
+						response.Meta = centralToolResultMetaWithApps(definition.Name, arguments, s.mcpAppsEnabled())
+					}
+					return response, responseErr
+				}
+			}
 			result, err := s.callNexusTool(ctx, definition.Name, arguments)
 			response, responseErr := s.gatewayToolResult(definition.Name, result, err)
+			if responseErr == nil && response != nil && !response.IsError && isProjectContextTool(definition.Name) {
+				if deliveryErr := s.recordProjectContextReturned(ctx, definition.Name, result); deliveryErr != nil {
+					failureResult, failureErr := projectToolError("PROJECT_OPERATION_FAILED", "failed to persist Project Context returned delivery", map[string]any{"reason": deliveryErr.Error()})
+					response, responseErr = s.gatewayToolResult(definition.Name, failureResult, failureErr)
+				}
+			}
 			if responseErr == nil && response != nil {
 				response.Meta = centralToolResultMetaWithApps(definition.Name, arguments, s.mcpAppsEnabled())
 			}
 			return response, responseErr
 		})
 	}
+}
+
+func (s *Server) currentMCPServer() *mcpsdk.Server {
+	if s == nil {
+		return nil
+	}
+	s.mcpServerMu.RLock()
+	defer s.mcpServerMu.RUnlock()
+	return s.mcpServer
 }
 
 func (s *Server) mcpAppsEnabled() bool {
@@ -99,7 +131,8 @@ func (s *Server) setMCPAppsEnabled(enabled bool) {
 	changed := s.cfg.MCPAppsEnabled != enabled
 	s.cfg.MCPAppsEnabled = enabled
 	s.mu.Unlock()
-	if !changed || s.mcpServer == nil {
+	server := s.currentMCPServer()
+	if !changed || server == nil {
 		return
 	}
 
@@ -112,16 +145,20 @@ func (s *Server) setMCPAppsEnabled(enabled bool) {
 	}
 	s.mcpToolsMu.RUnlock()
 	for _, tool := range published {
-		s.mcpServer.AddTool(nodeMCPToolWithApps(tool.Descriptor, enabled), s.nodeToolHandler(tool.Descriptor.Name))
+		server.AddTool(nodeMCPToolWithApps(tool.Descriptor, enabled), s.nodeToolHandler(tool.Descriptor.Name))
 	}
 	s.syncMCPAppResources()
+}
+
+func retiredAgentDockToolName(name string) bool {
+	return strings.TrimSpace(name) == "file_publish"
 }
 
 func (s *Server) registerNodeTools(node agentdock.Node, hello agentdock.Hello) {
 	defer s.syncMCPAppResources()
 	helloToolNames := make(map[string]struct{}, len(hello.Tools))
 	for _, descriptor := range hello.Tools {
-		if mcpcontract.IsCanonicalTool(descriptor.Name) || strings.TrimSpace(descriptor.Name) == "" {
+		if mcpcontract.IsCanonicalTool(descriptor.Name) || retiredAgentDockToolName(descriptor.Name) || strings.TrimSpace(descriptor.Name) == "" {
 			continue
 		}
 		helloToolNames[descriptor.Name] = struct{}{}
@@ -149,8 +186,10 @@ func (s *Server) registerNodeTools(node agentdock.Node, hello agentdock.Hello) {
 				}
 				continue
 			}
-			s.mcpServer.AddTool(nodeMCPToolWithApps(descriptor, s.mcpAppsEnabled()), s.nodeToolHandler(name))
 			s.mcpTools[name] = candidate
+			if server := s.currentMCPServer(); server != nil {
+				server.AddTool(nodeMCPToolWithApps(descriptor, s.mcpAppsEnabled()), s.nodeToolHandler(name))
+			}
 		}
 		s.mcpToolsMu.Unlock()
 		if exists && (published.ContractHash != contractHash ||
@@ -217,14 +256,77 @@ func (s *Server) nodeToolHandler(name string) mcpsdk.ToolHandler {
 }
 
 func (s *Server) callNodeTool(ctx context.Context, name string, arguments map[string]any) (*mcpsdk.CallToolResult, error) {
-	nodeID, _ := arguments["node_id"].(string)
-	nodeID = strings.TrimSpace(nodeID)
-	if nodeID == "" {
-		return s.gatewayToolResult(name, nil, errors.New("node_id is required"))
+	if retiredAgentDockToolName(name) {
+		return s.gatewayToolResult(name, map[string]any{"code": "UNKNOWN_TOOL"}, errors.New("tool has been retired"))
 	}
+	binding, ok := mcpClientBindingFromContext(ctx)
+	if !ok {
+		return s.gatewayToolResult(name, map[string]any{"code": "MCP_CLIENT_BINDING_REQUIRED"}, errors.New("authenticated MCP client binding is required"))
+	}
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
+	for _, forbidden := range []string{"node_id", "working_folder", "permissions"} {
+		if _, exists := arguments[forbidden]; exists {
+			return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorSessionTargetDenied, "field": forbidden}, fmt.Errorf("routing override %s is not allowed", forbidden))
+		}
+	}
+	workSessionID := strings.TrimSpace(stringArgument(arguments, "work_session_id"))
+	targetID := strings.TrimSpace(stringArgument(arguments, "target_id"))
+	if workSessionID == "" || targetID == "" {
+		return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorExecutionContextRequired}, errors.New("work_session_id and target_id are required"))
+	}
+	if s.projects == nil {
+		return s.gatewayToolResult(name, map[string]any{"code": "PROJECT_STORE_UNAVAILABLE"}, errors.New("Project store is unavailable"))
+	}
+	session, err := s.projects.GetWorkSession(ctx, binding.OwnerKey, workSessionID)
+	if err != nil {
+		return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorSessionTargetDenied}, err)
+	}
+	target, err := s.projects.GetWorkTarget(ctx, binding.OwnerKey, workSessionID, targetID)
+	if err != nil || target.Target.ProjectID != session.ProjectID {
+		if err == nil {
+			err = projectstore.ErrWorkTargetNotFound
+		}
+		return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorSessionTargetDenied}, err)
+	}
+	historicalControl := allowsHistoricalTargetControl(name, arguments)
+	if !historicalControl {
+		if target.Target.Status != protocol.TargetReady && target.Target.Status != protocol.TargetIdle && target.Target.Status != protocol.TargetRunning {
+			return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorSessionTargetDenied, "target_id": targetID, "status": target.Target.Status}, errors.New("Project Target is not ready for execution"))
+		}
+		project, projectErr := s.projects.GetProject(ctx, session.ProjectID)
+		if projectErr != nil || !project.Enabled {
+			if projectErr == nil {
+				projectErr = projectstore.ErrProjectNotFound
+			}
+			return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorContextRefreshRequired, "target_id": targetID}, projectErr)
+		}
+		if session.ProjectRevision != project.Revision {
+			return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorContextRefreshRequired, "target_id": targetID, "project_revision": project.Revision}, errors.New("Project configuration changed; refresh project_context before executing"))
+		}
+		deployment, deploymentErr := s.projects.GetDeployment(ctx, project.ID, target.Target.DeploymentID)
+		if deploymentErr != nil || !deployment.Enabled || deployment.ApplyStatus != string(protocol.DeploymentApplyApplied) || deployment.DesiredRevision != deployment.AppliedRevision || deployment.AppliedRevision != target.Target.DeploymentRevision {
+			if deploymentErr == nil {
+				deploymentErr = errors.New("Project Deployment revision is no longer current")
+			}
+			return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorRevisionConflict, "target_id": targetID}, deploymentErr)
+		}
+	}
+
+	nodeID := target.Target.NodeID
 	node, err := s.agentDock.Get(ctx, nodeID)
 	if err != nil {
 		return s.gatewayToolResult(name, nil, err)
+	}
+	if !historicalControl && target.Target.Permissions.FullAccess != node.FullAccess {
+		return s.gatewayToolResult(name, map[string]any{
+			"code": protocol.ErrorContextRefreshRequired, "target_id": targetID, "node_id": nodeID,
+		}, errors.New("Node Full Access changed; reopen or refresh the Project Target before executing"))
+	}
+	if !nodeUsesCurrentBridgeProtocol(node) {
+		details := map[string]any{"code": "BRIDGE_PROTOCOL_MISMATCH", "node_id": nodeID, "required_protocol": agentdock.ConnectionProtocolVersion}
+		return s.gatewayToolResult(name, details, errors.New("target AgentDock has not completed the current Bridge v4 handshake"))
 	}
 	if !containsString(node.Capabilities, name) {
 		return s.gatewayToolResult(name, nil, fmt.Errorf("AgentDock node %s does not provide tool %s", nodeID, name))
@@ -242,8 +344,23 @@ func (s *Server) callNodeTool(ctx context.Context, name string, arguments map[st
 		return s.gatewayToolResult(name, details, errors.New(mismatch.Message))
 	}
 
-	delete(arguments, "node_id")
-	result, err := s.agentDockHub.Invoke(ctx, nodeID, protocol.OperationToolCall, map[string]any{"tool": name, "arguments": arguments})
+	targetArguments, err := s.validateTargetNodeToolArguments(ctx, nodeID, name, arguments)
+	if err != nil {
+		if errors.Is(err, errTargetToolArgumentsInvalid) {
+			details := map[string]any{"code": "TARGET_TOOL_ARGUMENT_INVALID", "target_id": targetID, "tool": name}
+			return s.gatewayToolResult(name, details, errTargetToolArgumentsInvalid)
+		}
+		return s.gatewayToolResult(name, nil, err)
+	}
+	executionContext := &protocol.ExecutionContext{
+		WorkSessionID:      target.Target.WorkSessionID,
+		TargetID:           target.Target.ID,
+		ProjectID:          target.Target.ProjectID,
+		DeploymentID:       target.Target.DeploymentID,
+		DeploymentRevision: target.Target.DeploymentRevision,
+		ContextRevision:    target.Target.ContextRevision,
+	}
+	result, err := s.agentDockHub.InvokeWithExecutionContext(ctx, nodeID, protocol.OperationToolCall, executionContext, protocol.ToolCallRequest{Tool: name, Arguments: targetArguments})
 	if err == nil {
 		bridgeCapabilities, capabilityErr := s.agentDock.BridgeCapabilities(ctx, nodeID)
 		if capabilityErr != nil {
@@ -257,6 +374,71 @@ func (s *Server) callNodeTool(ctx context.Context, name string, arguments map[st
 		}
 	}
 	return s.gatewayToolResult(name, result, err)
+}
+
+func allowsHistoricalTargetControl(name string, arguments map[string]any) bool {
+	action := strings.ToLower(strings.TrimSpace(stringArgument(arguments, "action")))
+	switch name {
+	case "session_observe":
+		return action == "" || action == "list" || action == "status"
+	case "session_act":
+		return action == "kill" || action == "kill_all"
+	case "acp_session":
+		return action == "list" || action == "inspect" || action == "close" || action == "delete"
+	case "acp_prompt":
+		return action == "events" || action == "cancel"
+	case "acp_interaction":
+		return action == "list" || action == "inspect" || action == "cancel"
+	default:
+		return false
+	}
+}
+
+var errTargetToolArgumentsInvalid = errors.New("tool arguments do not match the target AgentDock input schema")
+
+func (s *Server) validateTargetNodeToolArguments(ctx context.Context, nodeID, name string, arguments map[string]any) (map[string]any, error) {
+	descriptors, err := s.agentDock.ToolDescriptors(ctx, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("read target AgentDock tool contract: %w", err)
+	}
+	descriptor, ok := findToolDescriptor(descriptors, name)
+	if !ok {
+		return nil, fmt.Errorf("target AgentDock tool contract is missing: %s", name)
+	}
+	encodedSchema, err := json.Marshal(descriptor.InputSchema)
+	if err != nil {
+		return nil, fmt.Errorf("encode target AgentDock input schema: %w", err)
+	}
+	var schema googlejsonschema.Schema
+	if err := json.Unmarshal(encodedSchema, &schema); err != nil {
+		return nil, fmt.Errorf("decode target AgentDock input schema: %w", err)
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		return nil, fmt.Errorf("resolve target AgentDock input schema: %w", err)
+	}
+	targetArguments := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		if key != "work_session_id" && key != "target_id" && key != "node_id" && key != "working_folder" && key != "permissions" {
+			targetArguments[key] = value
+		}
+	}
+	encodedArguments, err := json.Marshal(targetArguments)
+	if err != nil {
+		return nil, fmt.Errorf("encode target AgentDock tool arguments: %w", err)
+	}
+	var normalized any
+	if err := json.Unmarshal(encodedArguments, &normalized); err != nil {
+		return nil, fmt.Errorf("decode target AgentDock tool arguments: %w", err)
+	}
+	if err := resolved.Validate(normalized); err != nil {
+		return nil, errTargetToolArgumentsInvalid
+	}
+	return targetArguments, nil
+}
+
+func nodeUsesCurrentBridgeProtocol(node agentdock.Node) bool {
+	return strings.TrimSpace(node.ProtocolVersion) == agentdock.ConnectionProtocolVersion
 }
 
 func containsString(values []string, target string) bool {
@@ -285,14 +467,19 @@ func nodeInputSchema(schema map[string]any) map[string]any {
 		properties = make(map[string]any)
 		cloned["properties"] = properties
 	}
-	properties["node_id"] = map[string]any{"type": "string", "description": "Target AgentDock node ID from agentdock_context."}
+	delete(properties, "node_id")
+	delete(properties, "working_folder")
+	delete(properties, "permissions")
+	properties["work_session_id"] = map[string]any{"type": "string", "description": "Bound Project WorkSession id returned by project_open."}
+	properties["target_id"] = map[string]any{"type": "string", "description": "Bound Project Target id returned by project_open/project_context."}
 	required, _ := cloned["required"].([]any)
+	filtered := make([]any, 0, len(required)+2)
 	for _, value := range required {
-		if value == "node_id" {
-			return cloned
+		if value != "node_id" && value != "working_folder" && value != "permissions" && value != "work_session_id" && value != "target_id" {
+			filtered = append(filtered, value)
 		}
 	}
-	cloned["required"] = append(required, "node_id")
+	cloned["required"] = append(filtered, "work_session_id", "target_id")
 	return cloned
 }
 
@@ -403,6 +590,15 @@ func (s *Server) callNexusTool(ctx context.Context, name string, args map[string
 	switch name {
 	case "agentdock_context":
 		return s.callFleetAgentDockContext(ctx)
+	case mcpcontract.ToolProjectList:
+		if len(args) != 0 {
+			return projectToolError("INVALID_PROJECT", "project_list does not accept arguments", nil)
+		}
+		return s.callProjectList(ctx)
+	case mcpcontract.ToolProjectOpen:
+		return s.callProjectOpen(ctx, args)
+	case mcpcontract.ToolProjectContext:
+		return s.callProjectContext(ctx, args)
 	case "workflow_template_manage":
 		return s.callWorkflowTemplateManage(ctx, args)
 	case "recall_search":
@@ -505,6 +701,9 @@ func (s *Server) callRecallWriteOperation(ctx context.Context, args map[string]a
 			return nil, errors.New("card only supports plan and create")
 		}
 		result, err := s.store.WriteCard(request)
+		if err == nil {
+			s.versions.MarkChanged(ctx)
+		}
 		return asMap(result, err)
 	}
 	if target != "markdown" {
@@ -523,6 +722,9 @@ func (s *Server) callRecallWriteOperation(ctx context.Context, args map[string]a
 			return nil, recall.ErrConfirmationNeeded
 		}
 		err := s.store.Delete(path, true)
+		if err == nil {
+			s.versions.MarkChanged(ctx)
+		}
 		return asMap(map[string]any{"path": path, "deleted": err == nil}, err)
 	}
 	if action == "update_fact" {
@@ -621,6 +823,9 @@ func (s *Server) callRecallWriteOperation(ctx context.Context, args map[string]a
 		return asMap(result)
 	}
 	result, err := s.store.Write(request)
+	if err == nil {
+		s.versions.MarkChanged(ctx)
+	}
 	return asMap(map[string]any{"recall": result, "recall_store": "NexusDock Recall"}, err)
 }
 
@@ -706,6 +911,9 @@ func (s *Server) updateRecallFacts(ctx context.Context, path string, args map[st
 		return asMap(preview)
 	}
 	result, err := s.store.Write(recall.WriteRequest{Path: path, Content: updated, Confirmed: true, Overwrite: true})
+	if err == nil {
+		s.versions.MarkChanged(ctx)
+	}
 	return asMap(map[string]any{
 		"path": path, "changed": true, "confirmed": true, "written": err == nil,
 		"updates": updates, "diff": diff, "truncated": len(diff) >= maxBytes, "recall": result,

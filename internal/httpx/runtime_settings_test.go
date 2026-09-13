@@ -11,10 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uvwt/nexusdock/internal/agentdock"
 	"github.com/uvwt/nexusdock/internal/config"
 	"github.com/uvwt/nexusdock/internal/core"
 	"github.com/uvwt/nexusdock/internal/recall"
 	"github.com/uvwt/nexusdock/internal/settings"
+	"github.com/uvwt/nexusdock/internal/stage3"
 )
 
 func newRuntimeSettingsHTTPServer(t *testing.T, cfg config.Config) *Server {
@@ -38,7 +40,11 @@ func newRuntimeSettingsHTTPServer(t *testing.T, cfg config.Config) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewServer(cfg, store, slog.Default(), WithSystemDatabase(db), WithRuntimeSettings(runtimeSettings))
+	nodeStore, err := agentdock.NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewServer(cfg, store, nil, slog.Default(), WithSystemDatabase(db), WithRuntimeSettings(runtimeSettings), WithAgentDockNodes(nodeStore))
 }
 
 func TestRuntimeAISettingsAPIProtectsSecretsAndAppliesEmbeddingConfiguration(t *testing.T) {
@@ -145,6 +151,54 @@ func TestWorkflowEmbeddingUsesRuntimeAPIKey(t *testing.T) {
 	}
 }
 
+func TestRuntimeAISettingsAPIAppliesAndResetsStage3SystemPrompt(t *testing.T) {
+	const authToken = "nexus-stage3-prompt-test-token"
+	server := newRuntimeSettingsHTTPServer(t, config.Config{
+		AuthToken: authToken, RequireAuth: true,
+		EmbeddingModel: recall.DefaultEmbeddingModel, EmbeddingTimeout: 30 * time.Second,
+		ModelTimeout: 60 * time.Second, EvolutionInterval: 6 * time.Hour,
+	})
+	handler := server.Handler()
+
+	put := func(prompt map[string]any) settings.View {
+		t.Helper()
+		body := map[string]any{
+			"embedding": map[string]any{"enabled": false, "endpoint": "", "model": recall.DefaultEmbeddingModel, "timeout_seconds": 30, "api_key": map[string]any{"action": "keep"}},
+			"stage3": map[string]any{
+				"enabled": false, "endpoint": "", "model": "", "timeout_seconds": 60, "interval_minutes": 360,
+				"api_key": map[string]any{"action": "keep"}, "system_prompt": prompt,
+			},
+		}
+		payload, _ := json.Marshal(body)
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPut, "/v1/settings/ai", bytes.NewReader(payload))
+		request.Header.Set("Authorization", "Bearer "+authToken)
+		request.Header.Set("Content-Type", "application/json")
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("PUT settings status=%d body=%s", response.Code, response.Body.String())
+		}
+		var result struct {
+			Settings settings.View `json:"settings"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result.Settings
+	}
+
+	custom := "HTTP custom Stage 3 prompt.\nExact value.  "
+	view := put(map[string]any{"action": "replace", "value": custom})
+	if view.Stage3.SystemPrompt != custom || view.Stage3.SystemPromptSource != "custom" || server.currentConfig().ModelSystemPrompt != custom {
+		t.Fatalf("custom prompt not applied: view=%#v cfg=%q", view.Stage3, server.currentConfig().ModelSystemPrompt)
+	}
+
+	view = put(map[string]any{"action": "reset"})
+	if view.Stage3.SystemPrompt != stage3.BundledDefaultPrompt() || view.Stage3.SystemPromptSource != "bundled_default" || server.currentConfig().ModelSystemPrompt != stage3.BundledDefaultPrompt() {
+		t.Fatalf("bundled prompt not restored: view=%#v cfg=%q", view.Stage3, server.currentConfig().ModelSystemPrompt)
+	}
+}
+
 func TestRuntimeAIConnectionTestsUseSavedSecretsAndStayAuthenticated(t *testing.T) {
 	const (
 		authToken      = "nexus-test-token"
@@ -229,5 +283,130 @@ func TestRuntimeAIConnectionTestsUseSavedSecretsAndStayAuthenticated(t *testing.
 	}
 	if embeddingAuthorization != "Bearer "+embeddingToken {
 		t.Fatalf("embedding authorization=%q", embeddingAuthorization)
+	}
+}
+
+func TestRuntimeAISettingsAPIRevisionConflictAndReviewNodeValidation(t *testing.T) {
+	const authToken = "nexus-ai-revision-token"
+	server := newRuntimeSettingsHTTPServer(t, config.Config{
+		AuthToken: authToken, RequireAuth: true,
+		EmbeddingModel: recall.DefaultEmbeddingModel, EmbeddingTimeout: 30 * time.Second,
+		ModelTimeout: 60 * time.Second, EvolutionInterval: 6 * time.Hour,
+	})
+	handler := server.Handler()
+	reviewNode := pairProjectHTTPTestNode(t, server.agentDock, "device_stage3_review_node", "ReviewNode")
+
+	get := func() settings.View {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/v1/settings/ai", nil)
+		req.Header.Set("Authorization", "Bearer "+authToken)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("GET status=%d body=%s", res.Code, res.Body.String())
+		}
+		var out struct {
+			Settings settings.View `json:"settings"`
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Settings
+	}
+	put := func(revision, reviewNodeID string, want int) {
+		t.Helper()
+		body := map[string]any{
+			"expected_revision": revision,
+			"embedding":         map[string]any{"enabled": false, "endpoint": "", "model": recall.DefaultEmbeddingModel, "timeout_seconds": 30, "api_key": map[string]any{"action": "keep"}},
+			"stage3": map[string]any{
+				"enabled": false, "endpoint": "", "model": "", "timeout_seconds": 60, "interval_minutes": 360,
+				"api_key": map[string]any{"action": "keep"}, "system_prompt": map[string]any{"action": "keep"}, "review_node_id": reviewNodeID,
+			},
+		}
+		payload, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPut, "/v1/settings/ai", bytes.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer "+authToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("If-Match", revision)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != want {
+			t.Fatalf("PUT status=%d want=%d body=%s", res.Code, want, res.Body.String())
+		}
+	}
+
+	initial := get()
+	if initial.Revision != "rev-0" {
+		t.Fatalf("initial revision=%q", initial.Revision)
+	}
+	put(initial.Revision, reviewNode.ID, http.StatusOK)
+	current := get()
+	if current.Revision != "rev-1" || current.Stage3.ReviewNodeID != reviewNode.ID {
+		t.Fatalf("current=%#v", current)
+	}
+	put(initial.Revision, reviewNode.ID, http.StatusPreconditionFailed)
+	enabled := false
+	if _, err := server.agentDock.Update(t.Context(), reviewNode.ID, agentdock.UpdateInput{Enabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+	// Disabling a previously configured review node must not silently clear or replace it, and
+	// unrelated settings saves may keep the stale reference. Stage 3 routing will refuse it.
+	put(current.Revision, reviewNode.ID, http.StatusOK)
+	final := get()
+	if final.Revision != "rev-2" || final.Stage3.ReviewNodeID != reviewNode.ID {
+		t.Fatalf("disabled review node was not preserved=%#v", final)
+	}
+	put(final.Revision, "node_missing", http.StatusBadRequest)
+	unchanged := get()
+	if unchanged.Revision != "rev-2" || unchanged.Stage3.ReviewNodeID != reviewNode.ID {
+		t.Fatalf("invalid update changed state=%#v", unchanged)
+	}
+}
+
+func TestRuntimeAISettingsAPIRejectsExplicitNullPrompt(t *testing.T) {
+	const authToken = "nexus-ai-null-prompt-token"
+	server := newRuntimeSettingsHTTPServer(t, config.Config{AuthToken: authToken, RequireAuth: true, EmbeddingModel: recall.DefaultEmbeddingModel, EmbeddingTimeout: 30 * time.Second, ModelTimeout: 60 * time.Second, EvolutionInterval: 6 * time.Hour})
+	body := `{"embedding":{"enabled":false,"endpoint":"","model":"BAAI/bge-m3","timeout_seconds":30,"api_key":{"action":"keep"}},"stage3":{"enabled":false,"endpoint":"","model":"","timeout_seconds":60,"interval_minutes":360,"api_key":{"action":"keep"},"system_prompt":null,"review_node_id":""}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/settings/ai", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestRuntimeAISettingsLateApplyReloadsLatestRevision(t *testing.T) {
+	server := newRuntimeSettingsHTTPServer(t, config.Config{EmbeddingModel: recall.DefaultEmbeddingModel, EmbeddingTimeout: 30 * time.Second, ModelTimeout: 60 * time.Second, EvolutionInterval: 6 * time.Hour})
+	first := settings.UpdateInput{
+		Embedding:        settings.EmbeddingInput{Enabled: false, Model: recall.DefaultEmbeddingModel, TimeoutSeconds: 30, APIKey: settings.SecretInput{Action: "keep"}},
+		Stage3:           settings.Stage3Input{Enabled: false, Model: "model-one", TimeoutSeconds: 60, IntervalMinutes: 360, APIKey: settings.SecretInput{Action: "keep"}, SystemPrompt: settings.PromptInput{Action: "replace", Value: "prompt one"}},
+		ExpectedRevision: "rev-0",
+	}
+	if _, view, err := server.settings.Update(t.Context(), first); err != nil || view.Revision != "rev-1" {
+		t.Fatalf("first commit: view=%#v err=%v", view, err)
+	}
+	second := first
+	second.ExpectedRevision = "rev-1"
+	second.Stage3.Model = "model-two"
+	second.Stage3.SystemPrompt = settings.PromptInput{Action: "replace", Value: "prompt two"}
+	if _, view, err := server.settings.Update(t.Context(), second); err != nil || view.Revision != "rev-2" {
+		t.Fatalf("second commit: view=%#v err=%v", view, err)
+	}
+	cfg, view, err := server.applyCurrentRuntimeAISettings(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Revision != "rev-2" || cfg.ModelName != "model-two" || cfg.ModelSystemPrompt != "prompt two" || server.currentConfig().ModelSystemPrompt != "prompt two" {
+		t.Fatalf("B apply = cfg=%#v view=%#v current=%#v", cfg, view, server.currentConfig())
+	}
+	// Simulated late A apply still reloads the latest committed revision.
+	cfg, view, err = server.applyCurrentRuntimeAISettings(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Revision != "rev-2" || cfg.ModelName != "model-two" || server.currentConfig().ModelSystemPrompt != "prompt two" {
+		t.Fatalf("late A apply regressed settings: cfg=%#v view=%#v", cfg, view)
 	}
 }

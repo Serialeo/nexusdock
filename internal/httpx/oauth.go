@@ -19,23 +19,23 @@ import (
 const oauthFormBodyLimit = 64 << 10
 
 var oauthAuthorizeTemplate = template.Must(template.New("oauth-authorize").Parse(`<!doctype html>
-<html lang="{{.Text.Lang}}">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{.Text.Title}}</title>
+<title>授权 NexusDock</title>
 <style>
 :root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f9;color:#15171a}.card{width:min(520px,calc(100vw - 40px));padding:28px;border:1px solid #d9dde3;border-radius:16px;background:#fff;box-shadow:0 12px 32px rgba(0,0,0,.08)}h1{font-size:22px;margin:0 0 12px}p{line-height:1.6;color:#4b5563}.meta{padding:14px 16px;border-radius:10px;background:#f3f4f6;margin:18px 0}.meta strong,.meta span{display:block;overflow-wrap:anywhere}.meta span{font-size:13px;color:#6b7280;margin-top:5px}.actions{display:flex;gap:10px;justify-content:flex-end;margin-top:24px}button{border:0;border-radius:9px;padding:10px 16px;font:inherit;cursor:pointer}.deny{background:#eceff3;color:#252a31}.allow{background:#111827;color:#fff}@media(prefers-color-scheme:dark){body{background:#111317;color:#f4f4f5}.card{background:#191c21;border-color:#30343b}.meta{background:#22262d}.meta span,p{color:#a8b0bb}.deny{background:#2b3038;color:#f4f4f5}.allow{background:#f4f4f5;color:#111827}}
 </style>
 </head>
 <body><main class="card">
-<h1>{{.Text.Heading}}</h1>
-<p>{{.Text.Description}}</p>
+<h1>授权 MCP 客户端</h1>
+<p>此客户端请求访问 NexusDock MCP。授权后，它只能调用 <code>/mcp</code> 提供的工具，不会获得 Nexus 管理 API 权限。</p>
 <div class="meta"><strong>{{.ClientName}}</strong><span>{{.RedirectURI}}</span></div>
 <form method="post" action="/oauth/authorize" autocomplete="off">
 {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<div class="actions"><button class="deny" type="submit" name="decision" value="deny">{{.Text.Deny}}</button><button class="allow" type="submit" name="decision" value="allow">{{.Text.Allow}}</button></div>
+<div class="actions"><button class="deny" type="submit" name="decision" value="deny">拒绝</button><button class="allow" type="submit" name="decision" value="allow">允许访问</button></div>
 </form>
 </main></body></html>`))
 
@@ -49,44 +49,6 @@ type oauthAuthorizePage struct {
 	RedirectURI string
 	CSRFToken   string
 	Fields      []oauthHiddenField
-	Text        oauthAuthorizeText
-}
-
-type oauthAuthorizeText struct {
-	Lang          string
-	Title         string
-	Heading       string
-	Description   template.HTML
-	Deny          string
-	Allow         string
-	DefaultClient string
-}
-
-var oauthAuthorizeEnglish = oauthAuthorizeText{
-	Lang:          uiLocaleEnglish,
-	Title:         "Authorize NexusDock",
-	Heading:       "Authorize MCP client",
-	Description:   template.HTML(`This client is requesting access to NexusDock MCP. After authorization, it can only call tools exposed by <code>/mcp</code> and will not receive access to the Nexus management API.`),
-	Deny:          "Deny",
-	Allow:         "Allow access",
-	DefaultClient: "MCP client",
-}
-
-var oauthAuthorizeChinese = oauthAuthorizeText{
-	Lang:          uiLocaleChinese,
-	Title:         "授权 NexusDock",
-	Heading:       "授权 MCP 客户端",
-	Description:   template.HTML(`此客户端请求访问 NexusDock MCP。授权后，它只能调用 <code>/mcp</code> 提供的工具，不会获得 Nexus 管理 API 权限。`),
-	Deny:          "拒绝",
-	Allow:         "允许访问",
-	DefaultClient: "MCP 客户端",
-}
-
-func oauthAuthorizeTextFor(header string) oauthAuthorizeText {
-	if preferredUILocale(header) == uiLocaleChinese {
-		return oauthAuthorizeChinese
-	}
-	return oauthAuthorizeEnglish
 }
 
 type oauthAuthorizationRequest struct {
@@ -234,7 +196,6 @@ func (s *Server) oauthRegisterClient(w http.ResponseWriter, r *http.Request) {
 func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
-	w.Header().Set("Vary", "Accept-Language")
 	// 授权表单依赖 Origin 做 CSRF 同源校验。全局 no-referrer 会让 Chromium 的表单 POST
 	// 发送 Origin: null；same-origin 只保留站内来源，同时不会向跨源 callback 泄露 Referer。
 	w.Header().Set("Referrer-Policy", "same-origin")
@@ -287,13 +248,12 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet {
-		text := oauthAuthorizeTextFor(r.Header.Get("Accept-Language"))
 		name := client.Name
 		if name == "" {
-			name = text.DefaultClient
+			name = "MCP 客户端"
 		}
 		fields := authorizationValues(params)
-		page := oauthAuthorizePage{ClientName: name, RedirectURI: params.RedirectURI, CSRFToken: session.CSRFToken, Text: text}
+		page := oauthAuthorizePage{ClientName: name, RedirectURI: params.RedirectURI, CSRFToken: session.CSRFToken}
 		for _, key := range []string{"response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "resource", "scope", "state"} {
 			if value := fields.Get(key); value != "" {
 				page.Fields = append(page.Fields, oauthHiddenField{Name: key, Value: value})
@@ -402,25 +362,27 @@ func (s *Server) withMCPAccess(next http.HandlerFunc) http.HandlerFunc {
 		s.mu.RUnlock()
 		header := strings.TrimSpace(r.Header.Get("Authorization"))
 		if s.mcpToken != nil && bearerMatches(header, s.mcpToken.Token()) {
-			next(w, r)
+			next(w, r.WithContext(withMCPClientBinding(r.Context(), "mcp:dedicated-token")))
 			return
 		}
 		if strings.HasPrefix(strings.ToLower(header), "bearer ") && s.oauth != nil {
-			if _, err := s.oauth.AuthenticateAccess(r.Context(), bearerToken(header), s.oauthResource(r)); err == nil {
-				next(w, r)
+			if access, err := s.oauth.AuthenticateAccess(r.Context(), bearerToken(header), s.oauthResource(r)); err == nil {
+				ownerKey := "mcp:oauth:user:" + access.UserID + ":client:" + access.ClientID
+				next(w, r.WithContext(withMCPClientBinding(r.Context(), ownerKey)))
 				return
 			}
 			s.writeMCPBearerChallenge(w, r, true)
 			return
 		}
 		if header == "" && s.auth != nil {
-			if _, err := s.authenticateCookie(r); err == nil {
-				s.withWebSession(next, false)(w, r)
+			if session, err := s.authenticateCookie(r); err == nil {
+				ownerKey := "mcp:web:user:" + session.UserID + ":session:" + session.ID
+				s.withWebSession(next, false)(w, r.WithContext(withMCPClientBinding(r.Context(), ownerKey)))
 				return
 			}
 		}
 		if cfg.AuthToken == "" && s.auth == nil && s.isLocalAPIRequest(r) {
-			next(w, r)
+			next(w, r.WithContext(withMCPClientBinding(r.Context(), "mcp:local")))
 			return
 		}
 		s.writeMCPBearerChallenge(w, r, false)

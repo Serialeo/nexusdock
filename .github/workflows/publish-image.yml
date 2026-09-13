@@ -8,17 +8,19 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   publish:
     name: Publish container images
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PRIVATE_GO_READ_TOKEN: ${{ secrets.PRIVATE_GO_READ_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
@@ -29,24 +31,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Prepare image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: |
-            ghcr.io/${{ github.repository }}
-            agentdockio/nexusdock
+          images: ghcr.io/serialeo/nexusdock
           tags: |
             type=sha,prefix=sha-,format=short
+            type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and push image
@@ -55,10 +49,12 @@ jobs:
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          secret-envs: |
+            github_token=PRIVATE_GO_READ_TOKEN
           cache-from: type=gha,scope=nexusdock-runtime
           cache-to: type=gha,mode=max,scope=nexusdock-runtime,ignore-error=true
 
@@ -70,6 +66,9 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: docker/setup-buildx-action@v3
 
@@ -80,20 +79,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Resolve verification tag
         id: tag
         shell: bash
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
-            echo "value=latest" >> "$GITHUB_OUTPUT"
+            echo "value=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Pull and run published images
@@ -102,10 +95,7 @@ jobs:
           VERIFY_TAG: ${{ steps.tag.outputs.value }}
         run: |
           set -euo pipefail
-          images=(
-            "ghcr.io/${GITHUB_REPOSITORY}:${VERIFY_TAG}"
-            "agentdockio/nexusdock:${VERIFY_TAG}"
-          )
+          images=("ghcr.io/serialeo/nexusdock:${VERIFY_TAG}")
           for image in "${images[@]}"; do
             echo "Verifying ${image}"
             docker pull "$image"

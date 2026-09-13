@@ -16,6 +16,11 @@ HTTP_SOURCE = ROOT / "internal" / "httpx"
 REQUIRED_PATHS = {
     "/v1/recall",
     "/v1/recall/context-index",
+    "/v1/projects",
+    "/v1/projects/{projectID}",
+    "/v1/projects/{projectID}/deployments",
+    "/v1/projects/{projectID}/deployments/{deploymentID}",
+    "/v1/projects/{projectID}/deployments/{deploymentID}/apply",
     "/v1/runtime/nodes",
     "/v1/runtime/nodes/{nodeID}/tasks",
     "/v1/runtime/nodes/{nodeID}/skills",
@@ -40,137 +45,164 @@ FORBIDDEN_PATH_PREFIXES = (
     "/v1/runtime/overview",
     "/v1/runtime/workflow-templates",
     "/v1/runtime/capabilities",
+    "/v1/settings/instructions",
+    "/v1/runtime/nodes/{nodeID}/instructions",
+    "/v1/runtime/nodes/{nodeID}/direct-instructions",
+    "/v1/runtime/nodes/{nodeID}/file-access",
     "/v1/events",
     "/v1/schedules",
 )
 FORBIDDEN_FIELDS = {"recall_root"}
 FORBIDDEN_ERROR_CODES = {
     "COMMAND_EXPIRED",
+    "DIRECT_INSTRUCTIONS_REVISION_CONFLICT",
+    "FILE_ACCESS_POLICY_REVISION_CONFLICT",
+    "INSTRUCTIONS_OPERATION_FAILED",
+    "INSTRUCTIONS_REVISION_CONFLICT",
+    "INVALID_DIRECT_INSTRUCTIONS",
+    "INVALID_FILE_ACCESS_POLICY",
+    "INVALID_INSTRUCTIONS",
     "LEASE_EXPIRED",
     "SKILL_BLOCKED",
     "UNSUPPORTED_COMMAND",
 }
 ERROR_CODES = [
-    "ADMIN_NOT_INITIALIZED",
-	"AGENTDOCK_CONNECTION_UNAVAILABLE",
-    "AGENTDOCK_DEVICE_AUTH_FAILED",
-	"AGENTDOCK_DEVICE_TOKEN_FAILED",
-    "AGENTDOCK_NODE_CREDENTIALS_UNAVAILABLE",
-    "AGENTDOCK_NODE_DISABLED",
-    "AGENTDOCK_NODE_EXISTS",
-    "AGENTDOCK_NODE_LIST_FAILED",
-	"AGENTDOCK_NODE_LOOKUP_FAILED",
-    "AGENTDOCK_NODE_NOT_FOUND",
-    "AGENTDOCK_NODE_OPERATION_FAILED",
-    "AGENTDOCK_NODE_STORE_UNAVAILABLE",
-	"AGENTDOCK_PAIRING_CODE_FAILED",
-	"AGENTDOCK_PAIRING_CODE_INVALID",
-	"AGENTDOCK_PAIRING_UNAVAILABLE",
-    "AGENTDOCK_RUNTIME_BAD_RESPONSE",
-    "AGENTDOCK_RUNTIME_REQUEST_FAILED",
-    "AGENTDOCK_RUNTIME_UNAVAILABLE",
-    "AGENTDOCK_RUNTIME_UNREACHABLE",
-    "ARTIFACT_DOWNLOAD_BUSY",
-    "ARTIFACT_NODE_OFFLINE",
-    "ARTIFACT_NODE_RESPONSE_INVALID",
-    "ARTIFACT_PROXY_FAILED",
-    "ARTIFACT_SECRET_FAILED",
-    "ARTIFACT_TOO_LARGE",
-    "AUTH_STATUS_FAILED",
-    "CAPTURE_CARD_FAILED",
-    "CONFIRMATION_REQUIRED",
-    "CONTEXT_INDEX_FAILED",
-    "CREDENTIAL_POLICY_FAILED",
-    "CREDENTIAL_UPDATE_FAILED",
-    "CREDENTIAL_UPDATE_REQUIRED",
-    "CSRF_REJECTED",
-    "CURRENT_CREDENTIAL_INVALID",
-    "DELETE_FAILED",
-    "EMBEDDING_DISABLED",
-    "EMBEDDING_REINDEX_FAILED",
-    "EMBEDDING_SEARCH_FAILED",
-    "EVOLUTION_NOT_CONFIGURED",
-    "EVOLUTION_NOT_FOUND",
-    "HTTPS_REQUIRED",
-    "INTERNAL_ERROR",
-    "INVALID_AGENTDOCK_NODE",
-    "INVALID_CREDENTIALS",
-	"INVALID_DEVICE_TOKEN",
-    "INVALID_JSON",
-    "INVALID_MCP_ACTION",
-    "INVALID_MCP_NAME",
-    "INVALID_PATH",
-    "INVALID_PRIVATE_NOTE_MAINTENANCE_ACTION",
-    "INVALID_PRIVATE_NOTE_PATH",
-    "INVALID_PRIVATE_NOTE_STATUS_ACTION",
-    "INVALID_QUERY",
-    "INVALID_RUNTIME_SETTINGS",
-    "INVALID_SKILL_FILE",
-    "INVALID_SKILL_ID",
-    "INVALID_TASK_ID",
-    "INVALID_WORKFLOW_TEMPLATE",
-    "LIFECYCLE_OPERATION_CONFLICT",
-    "LIFECYCLE_POLICY_VERSION_CONFLICT",
-    "LIFECYCLE_QUERY_FAILED",
-    "LIFECYCLE_REVISION_CONFLICT",
-    "LIFECYCLE_TRANSITION_FAILED",
-    "LIST_CARDS_FAILED",
-    "LIST_FAILED",
-    "LOGIN_FAILED",
-    "LOGIN_RATE_LIMITED",
-    "LOGOUT_FAILED",
-    "MCP_APPS_ENABLED_REQUIRED",
-    "MCP_SETTINGS_READ_FAILED",
-    "MCP_SETTINGS_UNAVAILABLE",
-    "MCP_SETTINGS_UPDATE_FAILED",
-    "MCP_TOKEN_RESET_FAILED",
-    "MCP_TOKEN_UNAVAILABLE",
-    "MISSING_CONTENT",
-    "MISSING_PATH",
-    "MISSING_QUERY",
-    "MOVE_FAILED",
-    "ORIGIN_REJECTED",
-    "PATCH_FAILED",
-    "PREVIEW_FAILED",
-    "PRIVATE_NOTES_AGE_IDENTITY_INVALID",
-    "PRIVATE_NOTES_AGE_RECIPIENT_INVALID",
-    "PRIVATE_NOTES_AGE_RECIPIENT_MISSING",
-    "PRIVATE_NOTES_ROOT_REQUIRED",
-    "PRIVATE_NOTE_ENCRYPTED_MISSING",
-    "PRIVATE_NOTE_EXISTS",
-    "PRIVATE_NOTE_METADATA_INVALID",
-    "PRIVATE_NOTE_METADATA_TOO_LARGE",
-    "PRIVATE_NOTE_NOT_FOUND",
-    "PRIVATE_NOTE_OPERATION_FAILED",
-    "PRIVATE_NOTE_SYMLINK_REJECTED",
-    "PRIVATE_NOTE_UNSAFE_FILE",
-    "READ_FAILED",
-    "REQUEST_TOO_LARGE",
-    "SEARCH_CARDS_FAILED",
-    "SEARCH_FAILED",
-    "SESSION_LIST_FAILED",
-    "SESSION_NOT_FOUND",
-    "SESSION_REQUIRED",
-    "SESSION_REVOKE_FAILED",
-    "SETTINGS_READ_FAILED",
-    "SETTINGS_UNAVAILABLE",
-    "SETTINGS_UPDATE_FAILED",
-    "TOOL_CONTRACT_MISMATCH",
-    "UNAUTHORIZED",
-    "USE_LOGOUT",
-    "WORKFLOW_LIST_FAILED",
-    "WORKFLOW_MATCH_FAILED",
-    "WORKFLOW_PUBLISH_FAILED",
-    "WORKFLOW_REGISTRY_FAILED",
-    "WORKFLOW_REINDEX_FAILED",
-    "WORKFLOW_RETIRE_FAILED",
-    "WORKFLOW_RETIRE_OLD_FAILED",
-    "WORKFLOW_TEMPLATE_NOT_ACTIVE",
-    "WORKFLOW_TEMPLATE_NOT_FOUND",
-    "WORKFLOW_VECTOR_INDEX_INVALID",
-    "WORKFLOW_VERSION_IMMUTABLE",
-    "WRITE_CARD_FAILED",
-    "WRITE_FAILED",
+    'ADMIN_NOT_INITIALIZED',
+    'AGENTDOCK_CONNECTION_UNAVAILABLE',
+    'AGENTDOCK_DEVICE_TOKEN_FAILED',
+    'AGENTDOCK_NODE_CREDENTIALS_UNAVAILABLE',
+    'AGENTDOCK_NODE_DISABLED',
+    'AGENTDOCK_NODE_EXISTS',
+    'AGENTDOCK_NODE_LIST_FAILED',
+    'AGENTDOCK_NODE_LOOKUP_FAILED',
+    'AGENTDOCK_NODE_NOT_FOUND',
+    'AGENTDOCK_NODE_OPERATION_FAILED',
+    'AGENTDOCK_NODE_STORE_UNAVAILABLE',
+    'AGENTDOCK_PAIRING_CODE_FAILED',
+    'AGENTDOCK_PAIRING_CODE_INVALID',
+    'AGENTDOCK_PAIRING_UNAVAILABLE',
+    'AGENTDOCK_RUNTIME_BAD_RESPONSE',
+    'AGENTDOCK_RUNTIME_REQUEST_FAILED',
+    'AGENTDOCK_RUNTIME_UNAVAILABLE',
+    'AGENTDOCK_RUNTIME_UNREACHABLE',
+    'ARTIFACT_DOWNLOAD_BUSY',
+    'ARTIFACT_NODE_OFFLINE',
+    'ARTIFACT_NODE_RESPONSE_INVALID',
+    'ARTIFACT_PROXY_FAILED',
+    'ARTIFACT_SECRET_FAILED',
+    'ARTIFACT_TOO_LARGE',
+    'AUTH_STATUS_FAILED',
+    'CAPTURE_CARD_FAILED',
+    'CONFIRMATION_REQUIRED',
+    'CONTEXT_INDEX_FAILED',
+    'CREDENTIAL_POLICY_FAILED',
+    'CREDENTIAL_UPDATE_FAILED',
+    'CREDENTIAL_UPDATE_REQUIRED',
+    'CSRF_REJECTED',
+    'CURRENT_CREDENTIAL_INVALID',
+    'DELETE_FAILED',
+    'DEPLOYMENT_NODE_EXISTS',
+    'DEPLOYMENT_NOT_FOUND',
+    'EMBEDDING_DISABLED',
+    'EMBEDDING_REINDEX_FAILED',
+    'EMBEDDING_SEARCH_FAILED',
+    'EVOLUTION_NOT_CONFIGURED',
+    'EVOLUTION_NOT_FOUND',
+    'GIT_COMMIT_FAILED',
+    'GIT_DIFF_FAILED',
+    'GIT_LOG_FAILED',
+    'GIT_VERSION_FAILED',
+    'HTTPS_REQUIRED',
+    'INTERNAL_ERROR',
+    'INVALID_AGENTDOCK_NODE',
+    'INVALID_CREDENTIALS',
+    'INVALID_DEVICE_TOKEN',
+    'INVALID_FILE_BROWSE_QUERY',
+    'INVALID_JSON',
+    'INVALID_MCP_ACTION',
+    'INVALID_MCP_NAME',
+    'INVALID_PATH',
+    'INVALID_PRIVATE_NOTE_MAINTENANCE_ACTION',
+    'INVALID_PRIVATE_NOTE_PATH',
+    'INVALID_PRIVATE_NOTE_STATUS_ACTION',
+    'INVALID_PROJECT',
+    'INVALID_QUERY',
+    'INVALID_RUNTIME_SETTINGS',
+    'INVALID_SKILL_ACTION',
+    'INVALID_SKILL_FILE',
+    'INVALID_SKILL_ID',
+    'INVALID_TASK_ID',
+    'INVALID_WORKFLOW_TEMPLATE',
+    'LIFECYCLE_OPERATION_CONFLICT',
+    'LIFECYCLE_POLICY_VERSION_CONFLICT',
+    'LIFECYCLE_QUERY_FAILED',
+    'LIFECYCLE_REVISION_CONFLICT',
+    'LIFECYCLE_TRANSITION_FAILED',
+    'LIST_CARDS_FAILED',
+    'LIST_FAILED',
+    'LOGIN_FAILED',
+    'LOGIN_RATE_LIMITED',
+    'LOGOUT_FAILED',
+    'MCP_APPS_ENABLED_REQUIRED',
+    'MCP_SETTINGS_READ_FAILED',
+    'MCP_SETTINGS_UNAVAILABLE',
+    'MCP_SETTINGS_UPDATE_FAILED',
+    'MCP_TOKEN_RESET_FAILED',
+    'MCP_TOKEN_UNAVAILABLE',
+    'MISSING_CONTENT',
+    'MISSING_PATH',
+    'MISSING_QUERY',
+    'MOVE_FAILED',
+    'ORIGIN_REJECTED',
+    'PATCH_FAILED',
+    'PREVIEW_FAILED',
+    'PRIVATE_NOTES_AGE_IDENTITY_INVALID',
+    'PRIVATE_NOTES_AGE_RECIPIENT_INVALID',
+    'PRIVATE_NOTES_AGE_RECIPIENT_MISSING',
+    'PRIVATE_NOTES_ROOT_REQUIRED',
+    'PRIVATE_NOTE_ENCRYPTED_MISSING',
+    'PRIVATE_NOTE_EXISTS',
+    'PRIVATE_NOTE_METADATA_INVALID',
+    'PRIVATE_NOTE_METADATA_TOO_LARGE',
+    'PRIVATE_NOTE_NOT_FOUND',
+    'PRIVATE_NOTE_OPERATION_FAILED',
+    'PRIVATE_NOTE_SYMLINK_REJECTED',
+    'PRIVATE_NOTE_UNSAFE_FILE',
+    'PROJECT_LIST_FAILED',
+    'PROJECT_NOT_FOUND',
+    'PROJECT_OPERATION_FAILED',
+    'PROJECT_PROMPT_READ_FAILED',
+    'PROJECT_STORE_UNAVAILABLE',
+    'PROJECT_TARGET_REVOKE_FAILED',
+    'READ_FAILED',
+    'REQUEST_TOO_LARGE',
+    'RUNTIME_SETTINGS_REVISION_CONFLICT',
+    'SEARCH_CARDS_FAILED',
+    'SEARCH_FAILED',
+    'SESSION_LIST_FAILED',
+    'SESSION_NOT_FOUND',
+    'SESSION_REQUIRED',
+    'SESSION_REVOKE_FAILED',
+    'SETTINGS_READ_FAILED',
+    'SETTINGS_UNAVAILABLE',
+    'SETTINGS_UPDATE_FAILED',
+    'SKILL_SOURCE_READ_ONLY',
+    'TOOL_CONTRACT_MISMATCH',
+    'UNAUTHORIZED',
+    'USE_LOGOUT',
+    'WORKFLOW_LIST_FAILED',
+    'WORKFLOW_MATCH_FAILED',
+    'WORKFLOW_PUBLISH_FAILED',
+    'WORKFLOW_REGISTRY_FAILED',
+    'WORKFLOW_REINDEX_FAILED',
+    'WORKFLOW_RETIRE_FAILED',
+    'WORKFLOW_RETIRE_OLD_FAILED',
+    'WORKFLOW_TEMPLATE_NOT_ACTIVE',
+    'WORKFLOW_TEMPLATE_NOT_FOUND',
+    'WORKFLOW_VECTOR_INDEX_INVALID',
+    'WORKFLOW_VERSION_IMMUTABLE',
+    'WRITE_CARD_FAILED',
+    'WRITE_FAILED',
 ]
 FORBIDDEN_SCHEMAS = {
     "DeviceCapability",
@@ -321,14 +353,23 @@ def source_query_parameters() -> set[tuple[str, str, str]]:
         re.compile(r'r\.URL\.Query\(\)\.Get\("([^"]+)"\)'),
         re.compile(r'queryInt\(r,\s*"([^"]+)"'),
     )
-    for path in sorted(HTTP_SOURCE.glob("*.go")):
-        if path.name.endswith("_test.go"):
-            continue
-        text = path.read_text(encoding="utf-8")
+    source_texts = [
+        path.read_text(encoding="utf-8")
+        for path in sorted(HTTP_SOURCE.glob("*.go"))
+        if not path.name.endswith("_test.go")
+    ]
+    for text in source_texts:
         for method, route, handler in registration.findall(text):
             if not route.startswith("/v1/"):
                 continue
-            body = go_function_body(text, handler)
+            # Route registration and handler implementation do not have to live
+            # in the same Go file. Search the package sources so the contract
+            # checker does not force unrelated Runtime concerns into one file.
+            body = ""
+            for candidate in source_texts:
+                body = go_function_body(candidate, handler)
+                if body:
+                    break
             for pattern in query_patterns:
                 for name in pattern.findall(body):
                     result.add((method, normalized_route(route), name))
@@ -373,6 +414,30 @@ def validate_source_route_coverage(errors: list[str]) -> None:
         errors.append(f"HTTP route is missing from OpenAPI: {method} {route}")
     for method, route in sorted(contract_operations - source_operations):
         errors.append(f"OpenAPI operation has no HTTP route: {method} {route}")
+
+
+def validate_runtime_task_pagination(errors: list[str]) -> None:
+    document = current_openapi()
+    operation = document["paths"]["/v1/runtime/nodes/{nodeID}/tasks"]["get"]
+    parameters = {parameter["name"]: parameter["schema"] for parameter in operation["parameters"] if parameter.get("in") == "query"}
+    if set(parameters) != {"status", "q", "time_field", "from", "to", "offset", "limit"}:
+        errors.append("runtime task query must cover status, search, time range and pagination")
+    if parameters.get("time_field", {}).get("enum") != ["updated_at", "created_at"]:
+        errors.append("runtime task time_field must cover created_at and updated_at")
+    for name in ("from", "to"):
+        if parameters.get(name, {}).get("format") != "date-time":
+            errors.append(f"runtime task {name} must document RFC3339 timestamps")
+    if parameters.get("offset", {}).get("minimum") != 0 or parameters.get("limit", {}).get("maximum") != 200:
+        errors.append("runtime task pagination bounds are missing")
+    response = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    if response != {"$ref": "#/components/schemas/RuntimeTaskListResponse"}:
+        errors.append("runtime task list must use its typed response schema")
+    schemas = document["components"]["schemas"]
+    required = set(schemas.get("RuntimeTaskListResponse", {}).get("required", []))
+    if not {"items", "count", "total", "offset", "limit", "has_more", "counts"} <= required:
+        errors.append("runtime task pagination metadata must be required")
+    if set(schemas.get("RuntimeTaskCounts", {}).get("required", [])) != {"all", "active", "blocked", "completed"}:
+        errors.append("runtime task counts must include all status totals")
 
 
 def validate_retired_contract_dirs(errors: list[str]) -> None:
@@ -421,6 +486,7 @@ def main() -> int:
     validate_openapi_references(errors)
     validate_source_route_coverage(errors)
     validate_query_parameter_coverage(errors)
+    validate_runtime_task_pagination(errors)
     validate_retired_contract_dirs(errors)
     validate_error_code_catalog(errors)
     if errors:
