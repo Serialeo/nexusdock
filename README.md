@@ -14,6 +14,7 @@
 - **查看设备运行时**：选择具体节点后查看它的任务、Skill 和动态 MCP；这些状态仍保留在 AgentDock 本机。
 - **集中使用 Recall 与 Workflow**：管理长期记忆、经验卡片、版本历史和可复用工作流模板。
 - **提供统一 MCP 入口**：支持 OAuth，也可以为不支持 OAuth 的客户端使用独立 MCP Access Token。
+- **有界工作会话续接**：用户明确开启后，在指定命令结束时通过可见的 MCP App 请求 Host 继续；支持暂停、持久结果和精确领取。[使用方法、边界与真实 Host 验收](docs/work-session-continuation.md)。
 - **集中配置 AI 与向量能力**：在 Web 中配置 Embedding 和可选模型，并用于 Recall 与 Workflow 的语义能力。
 
 NexusDock 不替代 AgentDock。命令执行、文件操作、浏览器、Skill、动态 MCP 等设备能力仍由对应的 AgentDock 节点执行；NexusDock 负责中心管理、共享数据和路由。

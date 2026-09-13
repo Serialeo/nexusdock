@@ -34,7 +34,7 @@ func nexusToolDefinitionsWithApps(mcpAppsEnabled bool) []*mcpsdk.Tool {
 	for _, presentation := range presentations {
 		tools = append(tools, canonicalCentralToolWithApps(presentation, mcpAppsEnabled))
 	}
-	return tools
+	return append(tools, continuationToolDefinitions(mcpAppsEnabled)...)
 }
 
 func canonicalCentralTool(presentation centralToolPresentation) *mcpsdk.Tool {

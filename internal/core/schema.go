@@ -250,6 +250,27 @@ END`,
 )`,
 	`CREATE INDEX IF NOT EXISTS idx_work_targets_session ON work_targets(work_session_id, id)`,
 	`CREATE INDEX IF NOT EXISTS idx_work_targets_node_status ON work_targets(node_id, status, updated_at, id)`,
+	`CREATE TABLE IF NOT EXISTS work_continuations (
+    work_session_id TEXT PRIMARY KEY,
+    document_json BLOB NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (work_session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
+)`,
+	`CREATE TABLE IF NOT EXISTS command_source_receipts (
+    node_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    work_session_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    command_session_id TEXT NOT NULL,
+    outcome_hash TEXT NOT NULL,
+    outcome_json BLOB NOT NULL,
+    received_at TEXT NOT NULL,
+    eligible INTEGER NOT NULL CHECK (eligible IN (0, 1, 2)),
+    PRIMARY KEY(node_id, event_id),
+    UNIQUE(node_id, command_session_id)
+)`,
+	`CREATE INDEX IF NOT EXISTS idx_command_receipts_session ON command_source_receipts(work_session_id, target_id, command_session_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_command_receipts_node_retention ON command_source_receipts(node_id, eligible, received_at)`,
 	`CREATE TABLE IF NOT EXISTS project_context_deliveries (
     work_session_id TEXT NOT NULL,
     target_id TEXT NOT NULL DEFAULT '',

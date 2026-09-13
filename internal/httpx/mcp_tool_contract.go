@@ -19,6 +19,8 @@ const maxToolContractDifferences = 5
 
 var errIncompatibleToolContract = errors.New("AgentDock 工具契约不可安全合并")
 
+var errUnsafeToolVisibility = errors.New("AgentDock 工具 visibility 无效或不一致")
+
 type publishedNodeTool struct {
 	Descriptor             agentdock.ToolDescriptor
 	ContractHash           string
@@ -147,27 +149,27 @@ func comparableContract(descriptor agentdock.ToolDescriptor) (comparableToolCont
 	if err != nil {
 		return comparableToolContract{}, fmt.Errorf("规范化工具 %s 输出契约: %w", descriptor.Name, err)
 	}
-	return comparableToolContract{
-		InputSchema: inputSchema, OutputSchema: outputSchema,
-		Meta: executionToolMeta(descriptor.Meta),
-	}, nil
+	meta, err := executionToolMeta(descriptor.Meta)
+	if err != nil {
+		return comparableToolContract{}, fmt.Errorf("规范化工具 %s 可见性: %w", descriptor.Name, err)
+	}
+	return comparableToolContract{InputSchema: inputSchema, OutputSchema: outputSchema, Meta: meta}, nil
 }
 
-func executionToolMeta(meta map[string]any) map[string]any {
-	if len(meta) == 0 {
-		return nil
+func executionToolMeta(meta map[string]any) (map[string]any, error) {
+	visibility, err := normalizedToolVisibility(meta)
+	if err != nil {
+		return nil, err
 	}
-	execution := make(map[string]any, len(meta))
+	execution := make(map[string]any, len(meta)+1)
 	for key, value := range meta {
-		if key == "ui" {
-			continue
+		if key != "ui" {
+			execution[key] = value
 		}
-		execution[key] = value
 	}
-	if len(execution) == 0 {
-		return nil
-	}
-	return execution
+	// resourceUri 仅决定展示；visibility 决定可调用面，必须纳入执行契约。
+	execution["ui"] = map[string]any{"visibility": visibility}
+	return execution, nil
 }
 
 // semanticSchemaMap 只去掉不影响校验结果的展示字段，并规范 JSON Schema 中本身无顺序语义的集合。
@@ -390,6 +392,16 @@ func (s *Server) reconcileFleetNodeTool(name string) error {
 
 	descriptor, acceptedHashes, err := mergeFleetToolDescriptors(descriptors)
 	if err != nil {
+		if errors.Is(err, errUnsafeToolVisibility) {
+			// 保留旧 schema 可以拒绝不兼容调用，但保留旧 visibility 会扩大公开面，必须下架。
+			s.mcpToolsMu.Lock()
+			delete(s.mcpTools, name)
+			s.mcpToolsMu.Unlock()
+			if server := s.currentMCPServer(); server != nil {
+				server.RemoveTools(name)
+			}
+			return s.agentDock.DeletePublishedToolContract(ctx, name)
+		}
 		if errors.Is(err, errIncompatibleToolContract) {
 			return nil
 		}
@@ -421,7 +433,7 @@ func (s *Server) reconcileFleetNodeTool(name string) error {
 	}
 	s.mcpTools[name] = candidate
 	if server := s.currentMCPServer(); server != nil && descriptorChanged {
-		server.AddTool(nodeMCPToolWithApps(candidate.Descriptor, s.mcpAppsEnabled()), s.nodeToolHandler(name))
+		s.registerNodeMCPTool(server, candidate.Descriptor, s.mcpAppsEnabled())
 	}
 	s.mcpToolsMu.Unlock()
 	return nil
@@ -436,6 +448,7 @@ func mergeFleetToolDescriptors(descriptors []agentdock.ToolDescriptor) (agentdoc
 		return agentdock.ToolDescriptor{}, nil, err
 	}
 	acceptedHashes := make([]string, 0, len(descriptors))
+	var expectedVisibility []string
 	for _, descriptor := range descriptors {
 		if descriptor.Name != merged.Name {
 			return agentdock.ToolDescriptor{}, nil, fmt.Errorf("%w: tool name %q != %q", errIncompatibleToolContract, descriptor.Name, merged.Name)
@@ -444,10 +457,18 @@ func mergeFleetToolDescriptors(descriptors []agentdock.ToolDescriptor) (agentdoc
 		if err != nil {
 			return agentdock.ToolDescriptor{}, nil, err
 		}
+		visibility, _ := normalizedToolVisibility(descriptor.Meta)
+		if expectedVisibility == nil {
+			expectedVisibility = visibility
+		} else if !reflect.DeepEqual(expectedVisibility, visibility) {
+			return agentdock.ToolDescriptor{}, nil, fmt.Errorf("%w: %w: %s", errIncompatibleToolContract, errUnsafeToolVisibility, merged.Name)
+		}
 		acceptedHashes = append(acceptedHashes, hash)
 	}
+	mergedExecution, _ := executionToolMeta(merged.Meta) // 上面的 hash 已校验每个 descriptor。
 	for _, descriptor := range descriptors[1:] {
-		if !jsonValuesEqual(executionToolMeta(merged.Meta), executionToolMeta(descriptor.Meta)) {
+		nodeExecution, _ := executionToolMeta(descriptor.Meta)
+		if !jsonValuesEqual(mergedExecution, nodeExecution) {
 			return agentdock.ToolDescriptor{}, nil, fmt.Errorf("%w: %s execution meta", errIncompatibleToolContract, merged.Name)
 		}
 		merged.InputSchema, err = mergeSchemaMaps("inputSchema", merged.InputSchema, descriptor.InputSchema)
@@ -459,9 +480,22 @@ func mergeFleetToolDescriptors(descriptors []agentdock.ToolDescriptor) (agentdoc
 			return agentdock.ToolDescriptor{}, nil, err
 		}
 	}
-	// _meta.ui 是展示绑定，不属于节点 resource provider 能力；只有所有 provider 展示元数据一致时才保留。
+	// 展示绑定只有所有 provider 一致时才保留；受限 visibility 即使展示被移除也必须保留。
 	// resource.read provider 由 Hello.ui_resources 独立决定，安全提示仍按 MCP 默认语义保守合并。
 	merged.Meta = mergeFleetToolMeta(descriptors)
+	visibility, _ := normalizedToolVisibility(descriptors[0].Meta)
+	if len(visibility) != 2 {
+		if merged.Meta == nil {
+			merged.Meta = make(map[string]any)
+		}
+		ui, _ := merged.Meta["ui"].(map[string]any)
+		copyUI := make(map[string]any, len(ui)+1)
+		for key, value := range ui {
+			copyUI[key] = value
+		}
+		copyUI["visibility"] = visibility
+		merged.Meta["ui"] = copyUI
+	}
 	merged.Annotations = mergeFleetToolAnnotations(descriptors)
 	merged, err = sanitizeFleetToolDescriptor(merged)
 	if err != nil {

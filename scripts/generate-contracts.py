@@ -565,7 +565,7 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         {
             "ok": scalar("boolean", "请求是否成功。"),
             "token": scalar("string", "用于 Nexus /mcp 的 Bearer Token。", minLength=64, maxLength=64),
-            "mcp_apps_enabled": scalar("boolean", "是否向 MCP 客户端发布 MCP Apps UI 元数据与资源。"),
+            "mcp_apps_enabled": scalar("boolean", "是否发布 MCP Apps 资源及 App 专用工具；关闭会下架 App 专用工具并拒绝续接投递，保留模型工具的可见性限制。"),
             "persisted": scalar("boolean", "是否已保存 SQLite 覆盖配置；false 表示当前来自环境变量或默认值。"),
             "updated_at": scalar("string", "最近一次持久化更新时间。", format="date-time"),
         },

@@ -138,6 +138,8 @@ func run(args []string) error {
 		MaxHeaderBytes:    64 << 10,
 	}
 
+	waitContinuation := server.StartWorkContinuation(ctx)
+	defer waitContinuation()
 	server.StartEvolutionStage3(ctx)
 	logger.Info("nexusdock starting", "addr", cfg.Addr(), "nexus_data_dir", cfg.NexusDataDir, "recall_repo_dir", cfg.RecallRepoDir, "mcp_apps_enabled", cfg.MCPAppsEnabled, "embedding_enabled", cfg.EmbeddingEnabled, "embedding_model", cfg.EmbeddingModel, "stage3_evolution_enabled", cfg.EvolutionEnabled && cfg.ModelEndpoint != "" && cfg.ModelName != "")
 	serveErr := serveHTTP(ctx, httpServer)

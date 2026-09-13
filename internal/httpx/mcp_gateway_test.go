@@ -247,7 +247,14 @@ func TestCallNodeToolReturnsContractMismatchBeforeInvoke(t *testing.T) {
 		mcpServer:    mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test", Version: "1"}, nil),
 		mcpTools:     make(map[string]publishedNodeTool),
 	}
-	server.registerNodeTools(agentdock.Node{ID: "node_old", Version: "1.8.3"}, agentdock.Hello{Tools: []agentdock.ToolDescriptor{published}})
+	// 模拟客户端仍持有旧公开契约；注册流程只读取真实节点的持久化 Hello 快照。
+	publishedHash, err := toolContractHash(published)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.mcpTools[published.Name] = publishedNodeTool{
+		Descriptor: published, ContractHash: publishedHash, AcceptedSemanticHashes: []string{publishedHash},
+	}
 	ctx, route := bindNodeRoutingTargetForTest(t, projects, target)
 	route["timeout"] = 1
 	result, err := server.callNodeTool(ctx, "exec_command", route)

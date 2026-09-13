@@ -95,6 +95,24 @@ ERROR_CODES = [
     'CAPTURE_CARD_FAILED',
     'CONFIRMATION_REQUIRED',
     'CONTEXT_INDEX_FAILED',
+    'CONTINUATION_ATTEMPT_DENIED',
+    'CONTINUATION_BINDING_DENIED',
+    'CONTINUATION_BUDGET_EXHAUSTED',
+    'CONTINUATION_CONFIRMATION_REQUIRED',
+    'CONTINUATION_CONSUME_DENIED',
+    'CONTINUATION_DENIED',
+    'CONTINUATION_DISPATCH_FENCED',
+    'CONTINUATION_LEASE_EXPIRED',
+    'CONTINUATION_NEEDS_ATTENTION',
+    'CONTINUATION_NOT_CONSUMED',
+    'CONTINUATION_PAUSED',
+    'CONTINUATION_RECEIPT_CONFLICT',
+    'CONTINUATION_RECOVERY_REQUIRED',
+    'CONTINUATION_SOURCE_DENIED',
+    'CONTINUATION_SOURCE_EXPIRED',
+    'CONTINUATION_TARGET_DENIED',
+    'CONTINUATION_VIEW_BUSY',
+    'CONTINUATION_WAKE_NOT_FOUND',
     'CREDENTIAL_POLICY_FAILED',
     'CREDENTIAL_UPDATE_FAILED',
     'CREDENTIAL_UPDATE_REQUIRED',
@@ -201,6 +219,7 @@ ERROR_CODES = [
     'WORKFLOW_TEMPLATE_NOT_FOUND',
     'WORKFLOW_VECTOR_INDEX_INVALID',
     'WORKFLOW_VERSION_IMMUTABLE',
+    'WORK_CONTINUATION_DENIED',
     'WRITE_CARD_FAILED',
     'WRITE_FAILED',
 ]
@@ -465,6 +484,10 @@ def source_public_error_codes() -> set[str]:
         codes.update(re.findall(r'coded\("([A-Z][A-Z0-9_]+)"', text))
         if path.name == "store.go":
             codes.update(re.findall(r'return\s+"([A-Z][A-Z0-9_]+)"', text))
+    # ContinuationError codes pass through the MCP boundary unchanged.
+    continuation_source = ROOT / "internal" / "project" / "continuation.go"
+    if continuation_source.exists():
+        codes.update(re.findall(r'continuationError\("([A-Z][A-Z0-9_]+)"', continuation_source.read_text(encoding="utf-8")))
     return codes
 
 

@@ -19,6 +19,16 @@ type centralOutputContractCoverageEntry struct {
 // Nexus 只负责自己生成 structuredContent 的中央工具契约。
 // 节点工具由 AgentDock 负责 runtime contract，Nexus 这里只验证代理层保持 outputSchema 与结果透明。
 var centralOutputContractCoverageInventory = map[string]centralOutputContractCoverageEntry{
+	"work_continuation":            {Variants: []string{"enable", "await", "settle", "pause", "status", "recover"}},
+	"present_work_continuation":    {Variants: []string{"success"}},
+	"consume_work_wake":            {Variants: []string{"success"}},
+	"work_continuation_bind":       {Variants: []string{"success"}},
+	"work_continuation_state":      {Variants: []string{"success"}},
+	"work_continuation_heartbeat":  {Variants: []string{"success"}},
+	"work_continuation_pause":      {Variants: []string{"success"}},
+	"work_wake_acquire":            {Variants: []string{"success"}},
+	"work_wake_prepare":            {Variants: []string{"success"}},
+	"work_wake_finish":             {Variants: []string{"success"}},
 	"agentdock_context":            {Variants: []string{"success"}},
 	mcpcontract.ToolProjectList:    {Variants: []string{"success"}},
 	mcpcontract.ToolProjectOpen:    {Variants: []string{"success"}},

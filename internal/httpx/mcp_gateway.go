@@ -72,12 +72,23 @@ func (s *Server) registerCentralToolsOn(server *mcpsdk.Server) {
 	if s == nil || server == nil {
 		return
 	}
+	// 开关变化必须显式移除 app-only 工具，AddTool 不能退休上一份目录。
+	if !s.mcpAppsEnabled() {
+		for _, name := range continuationToolNames() {
+			if continuationAppOnly(name) || name == "present_work_continuation" {
+				server.RemoveTools(name)
+			}
+		}
+	}
 	for _, definition := range nexusToolDefinitionsWithApps(s.mcpAppsEnabled()) {
 		definition := definition
 		server.AddTool(definition, func(ctx context.Context, request *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 			arguments, err := toolArguments(request)
 			if err != nil {
 				return nil, err
+			}
+			if isContinuationTool(definition.Name) {
+				return s.continuationToolResult(ctx, definition.Name, arguments)
 			}
 			if isProjectContextTool(definition.Name) {
 				ackResult, ackErr := s.consumeProjectContextAck(ctx, request)
@@ -136,7 +147,7 @@ func (s *Server) setMCPAppsEnabled(enabled bool) {
 		return
 	}
 
-	// MCP Apps UI 只属于展示层；刷新对外工具和资源，不改节点持久化 descriptor。
+	// 关闭 Apps 时下架 app-only 工具；普通工具仅移除展示绑定，不改变持久化 descriptor。
 	s.registerCentralTools()
 	s.mcpToolsMu.RLock()
 	published := make([]publishedNodeTool, 0, len(s.mcpTools))
@@ -145,7 +156,7 @@ func (s *Server) setMCPAppsEnabled(enabled bool) {
 	}
 	s.mcpToolsMu.RUnlock()
 	for _, tool := range published {
-		server.AddTool(nodeMCPToolWithApps(tool.Descriptor, enabled), s.nodeToolHandler(tool.Descriptor.Name))
+		s.registerNodeMCPTool(server, tool.Descriptor, enabled)
 	}
 	s.syncMCPAppResources()
 }
@@ -162,6 +173,13 @@ func (s *Server) registerNodeTools(node agentdock.Node, hello agentdock.Hello) {
 			continue
 		}
 		helloToolNames[descriptor.Name] = struct{}{}
+		if s.agentDock != nil {
+			// 持久化 Hello 是完整快照；先检查全部 provider，避免短暂公开冲突的可见性。
+			if err := s.reconcileFleetNodeTool(descriptor.Name); err != nil && s.logger != nil {
+				s.logger.Warn("检查 AgentDock 工具契约兼容性失败", "tool", descriptor.Name, "error", err)
+			}
+			continue
+		}
 		contractHash, err := toolContractHash(descriptor)
 		if err != nil {
 			if s.logger != nil {
@@ -188,7 +206,7 @@ func (s *Server) registerNodeTools(node agentdock.Node, hello agentdock.Hello) {
 			}
 			s.mcpTools[name] = candidate
 			if server := s.currentMCPServer(); server != nil {
-				server.AddTool(nodeMCPToolWithApps(descriptor, s.mcpAppsEnabled()), s.nodeToolHandler(name))
+				s.registerNodeMCPTool(server, descriptor, s.mcpAppsEnabled())
 			}
 		}
 		s.mcpToolsMu.Unlock()
@@ -219,6 +237,10 @@ func nodeMCPTool(descriptor agentdock.ToolDescriptor) *mcpsdk.Tool {
 }
 
 func nodeMCPToolWithApps(descriptor agentdock.ToolDescriptor, mcpAppsEnabled bool) *mcpsdk.Tool {
+	visibility, err := normalizedToolVisibility(descriptor.Meta)
+	if err != nil || (!mcpAppsEnabled && !containsString(visibility, "model")) {
+		return nil
+	}
 	tool := &mcpsdk.Tool{
 		Name: descriptor.Name, Title: descriptor.Title, Description: descriptor.Description,
 		InputSchema: nodeInputSchema(descriptor.InputSchema), OutputSchema: descriptor.OutputSchema,
@@ -234,6 +256,9 @@ func nodeMCPToolWithApps(descriptor agentdock.ToolDescriptor, mcpAppsEnabled boo
 		meta := make(mcpsdk.Meta, len(descriptor.Meta))
 		for key, value := range descriptor.Meta {
 			if key == "ui" && !mcpAppsEnabled {
+				if len(visibility) != 2 {
+					meta[key] = map[string]any{"visibility": visibility}
+				}
 				continue
 			}
 			meta[key] = value
@@ -256,6 +281,12 @@ func (s *Server) nodeToolHandler(name string) mcpsdk.ToolHandler {
 }
 
 func (s *Server) callNodeTool(ctx context.Context, name string, arguments map[string]any) (*mcpsdk.CallToolResult, error) {
+	if published, exists := s.publishedNodeTool(name); exists {
+		visibility, err := normalizedToolVisibility(published.Descriptor.Meta)
+		if err != nil || (!s.mcpAppsEnabled() && !containsString(visibility, "model")) {
+			return s.gatewayToolResult(name, map[string]any{"code": "TOOL_NOT_AVAILABLE"}, errors.New("tool visibility is unavailable with current MCP Apps settings"))
+		}
+	}
 	if retiredAgentDockToolName(name) {
 		return s.gatewayToolResult(name, map[string]any{"code": "UNKNOWN_TOOL"}, errors.New("tool has been retired"))
 	}
@@ -587,6 +618,9 @@ func (s *Server) decorateRecallSearchResults(results []recall.SearchResult) ([]m
 }
 
 func (s *Server) callNexusTool(ctx context.Context, name string, args map[string]any) (map[string]any, error) {
+	if isContinuationTool(name) {
+		return s.callWorkContinuation(ctx, name, args)
+	}
 	switch name {
 	case "agentdock_context":
 		return s.callFleetAgentDockContext(ctx)

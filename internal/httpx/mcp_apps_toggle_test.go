@@ -12,8 +12,11 @@ import (
 
 func TestNexusMCPAppsDisabledRemovesCentralAndNodePresentationOnly(t *testing.T) {
 	for _, tool := range nexusToolDefinitionsWithApps(false) {
-		if tool.Meta["ui"] != nil {
-			t.Fatalf("central tool %s still exposes Apps UI metadata: %#v", tool.Name, tool.Meta)
+		if ui, ok := tool.Meta["ui"].(map[string]any); ok && ui["resourceUri"] != nil {
+			t.Fatalf("central tool %s still exposes Apps resource: %#v", tool.Name, tool.Meta)
+		}
+		if continuationAppOnly(tool.Name) {
+			t.Fatalf("app-only tool %s exposed with Apps disabled", tool.Name)
 		}
 	}
 	if meta := centralToolResultMetaWithApps("workflow_template_manage", map[string]any{"action": "match"}, false); meta != nil {
