@@ -1,7 +1,7 @@
-name: Publish container
+name: Publish images and releases
 
 on:
-  workflow_dispatch:
+  workflow_call:
   push:
     tags:
       - 'v*'
@@ -9,16 +9,96 @@ on:
 permissions:
   contents: read
 
+# 与调用方 CI 使用不同前缀，防止 reusable workflow 取消自己的调用方。
+concurrency:
+  group: publish-nexusdock-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  prepare:
+    name: Prepare validated publication
+    if: github.repository == 'Serialeo/nexusdock' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      release: ${{ steps.meta.outputs.release }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      version: ${{ steps.meta.outputs.version }}
+      tags: ${{ steps.meta.outputs.tags }}
+    env:
+      GOPROXY: https://proxy.golang.org,direct
+      GOSUMDB: sum.golang.org
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Validate ref and image tags
+        id: meta
+        run: python3 scripts/release/metadata.py
+
+      - uses: actions/setup-go@v5
+        if: steps.meta.outputs.release == 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        if: steps.meta.outputs.release == 'true'
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # main 候选由调用方 CI 完整验证；tag 必须独立验证相同 SHA，不能绕过检查。
+      - name: Validate tagged source and embedded web assets
+        if: steps.meta.outputs.release == 'true'
+        run: |
+          make ci
+          git diff --exit-code
+
+      - name: Package Linux amd64 release
+        if: steps.meta.outputs.release == 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.meta.outputs.version }}
+          RELEASE_ROOT: ${{ runner.temp }}/nexusdock-release
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          mkdir -p "$RELEASE_ROOT/package" "$RELEASE_ROOT/dist"
+          go build -trimpath -ldflags='-s -w' -o "$RELEASE_ROOT/package/nexusdock" ./cmd/nexusdock
+          cp README.md .env.example "$RELEASE_ROOT/package/"
+          printf 'version=%s\ncommit=%s\n' "$RELEASE_VERSION" "$GITHUB_SHA" > "$RELEASE_ROOT/package/BUILD_INFO"
+          archive="nexusdock-${RELEASE_VERSION}-linux-amd64.tar.gz"
+          tar -czf "$RELEASE_ROOT/dist/$archive" -C "$RELEASE_ROOT/package" nexusdock README.md .env.example BUILD_INFO
+          cd "$RELEASE_ROOT/dist"
+          sha256sum "$archive" > SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        if: steps.meta.outputs.release == 'true'
+        with:
+          name: nexusdock-release-${{ github.sha }}
+          path: ${{ runner.temp }}/nexusdock-release/dist/*
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
-    name: Publish container images
+    name: Publish container image
+    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -29,18 +109,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prepare image metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/serialeo/nexusdock
-          tags: |
-            type=sha,prefix=sha-,format=short
-            type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-
       - name: Build and push image
         id: push
         uses: docker/build-push-action@v6
@@ -49,67 +117,100 @@ jobs:
           file: Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ needs.prepare.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/Serialeo/nexusdock
+            org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=nexusdock-runtime
           cache-to: type=gha,mode=max,scope=nexusdock-runtime,ignore-error=true
 
-      - name: Report published digest
-        run: echo "digest=${{ steps.push.outputs.digest }}"
-
   verify:
-    name: Verify public container pulls
+    name: Verify public image by digest
     needs: publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
     steps:
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Ensure GHCR verification is anonymous
-        run: docker logout ghcr.io >/dev/null 2>&1 || true
-
-      - name: Resolve verification tag
-        id: tag
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Pull and run published images without credentials
-        shell: bash
+      - name: Pull and run the published image without credentials
         env:
-          VERIFY_TAG: ${{ steps.tag.outputs.value }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
         run: |
           set -euo pipefail
-          images=("ghcr.io/serialeo/nexusdock:${VERIFY_TAG}")
-          for image in "${images[@]}"; do
-            echo "Verifying ${image}"
-            docker pull "$image"
-            name="nexus-verify-${RANDOM}"
-            docker run -d --name "$name" -e NEXUS_AUTH_TOKEN=release-verification "$image"
-            ready=false
-            for _ in $(seq 1 30); do
-              status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$name")"
-              if [[ "$status" == healthy ]]; then
-                ready=true
-                break
-              fi
-              if [[ "$(docker inspect -f '{{.State.Status}}' "$name")" == exited ]]; then
-                docker logs "$name"
-                exit 1
-              fi
-              sleep 2
-            done
-            if [[ "$ready" != true ]]; then
-              docker inspect "$name"
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          image="ghcr.io/serialeo/nexusdock@${IMAGE_DIGEST}"
+          docker pull "$image"
+          name="nexus-verify-${RANDOM}"
+          trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$name" -e NEXUS_AUTH_TOKEN=release-verification "$image"
+          for _ in $(seq 1 30); do
+            status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$name")"
+            if [[ "$status" == healthy ]]; then
+              docker inspect -f '{{json .RepoDigests}}' "$image"
+              exit 0
+            fi
+            if [[ "$(docker inspect -f '{{.State.Status}}' "$name")" == exited ]]; then
               docker logs "$name"
               exit 1
             fi
-            docker inspect -f '{{json .RepoDigests}}' "$image"
-            docker rm -f "$name"
+            sleep 2
           done
+          docker inspect "$name"
+          docker logs "$name"
+          exit 1
+
+  release:
+    name: Publish GitHub Release assets
+    needs: [prepare, publish, verify]
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nexusdock-release-${{ github.sha }}
+          path: release-assets
+
+      - name: Verify release checksums
+        working-directory: release-assets
+        run: sha256sum --check SHA256SUMS
+
+      - name: Create or recover release for the existing version tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          # Markdown 反引号必须作为正文写入，不能触发 shell 命令替换。
+          # shellcheck disable=SC2016
+          printf '<!-- nexusdock-publication:start -->\nLinux amd64 binary and SHA256SUMS are attached. The binary includes the built Web UI.\n\nContainer: `ghcr.io/serialeo/nexusdock@%s`\n\nSource commit: `%s`\n<!-- nexusdock-publication:end -->\n' "$IMAGE_DIGEST" "$GITHUB_SHA" > "$notes"
+          flags=(--title "$RELEASE_VERSION" --notes-file "$notes")
+          if [[ "$PRERELEASE" == true ]]; then
+            flags+=(--prerelease --latest=false)
+          fi
+          existing="$RUNNER_TEMP/existing-release.json"
+          if gh release view "$RELEASE_VERSION" --json body > "$existing"; then
+            # 上传可在创建 Release 后中断；重跑补齐资产，并保留自动变更记录与人工说明。
+            EXISTING_RELEASE="$existing" RELEASE_NOTES="$notes" python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+
+          notes = pathlib.Path(os.environ["RELEASE_NOTES"])
+          metadata = notes.read_text().rstrip()
+          body = json.loads(pathlib.Path(os.environ["EXISTING_RELEASE"]).read_text()).get("body") or ""
+          block = re.compile(r"<!-- nexusdock-publication:start -->.*?<!-- nexusdock-publication:end -->", re.DOTALL)
+          body = block.sub(lambda _: metadata, body) if block.search(body) else metadata + "\n\n" + body
+          notes.write_text(body)
+          PY
+            gh release upload "$RELEASE_VERSION" release-assets/* --clobber
+            # 只有资产全部上传成功后才更新 digest，并发布中断遗留的 draft。
+            gh release edit "$RELEASE_VERSION" --draft=false "${flags[@]}"
+          else
+            gh release create "$RELEASE_VERSION" release-assets/* --verify-tag --generate-notes "${flags[@]}"
+          fi

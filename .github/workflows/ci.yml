@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - '**'
   pull_request:
 
 permissions:
@@ -40,3 +42,13 @@ jobs:
 
       - name: Build production image
         run: docker build --tag nexusdock:ci .
+
+  publish-candidate:
+    name: Publish validated main candidate
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Serialeo/nexusdock'
+    # reusable workflow 内 tag-only Release job 也受调用方权限上限约束；写权限只授予可信 main push。
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/publish-image.yml

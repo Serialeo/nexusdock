@@ -342,4 +342,11 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 更多开发约束见 [`AGENTS.md`](./AGENTS.md)。
 
-容器发行采用“候选镜像先验收、最终 tag 后发布”的顺序。源码 CI 通过后，在目标 commit 上手动运行 **Publish container**；非 `v*` 的 workflow dispatch 只发布 `ghcr.io/serialeo/nexusdock:sha-<short-commit>`，不会更新 `latest`。AgentDock 同步运行 **Publish candidate containers** 生成 runtime/dev/browser 三个 `sha-*` 候选。随后在本仓运行 **Verify paired public images**，传入四个精确 SHA 标签或 digest；该 workflow 会直接匿名拉取镜像，并验证多架构 manifest、镜像凭据泄漏、各 variant 启动、真实 A↔N 配对、Global/Node/Direct/Stage3 设置以及 A/N 数据卷重启持久化。正式发布前应确保 `Serialeo/agentdock` 和 `Serialeo/nexusdock` 两个 GHCR container package 均已设为 Public。
+发行由 GitHub Actions 自动执行：
+
+- 推送到 `main` 后，**CI** 完成 `make ci`、嵌入式前端一致性检查和容器构建，再自动发布该次已验证 commit 的 `ghcr.io/serialeo/nexusdock:sha-<前7位commit>` 候选镜像。候选不会更新 `latest`，也不会创建 GitHub Release。其他分支和 Pull Request 只执行检查。
+- 推送已存在的版本标签，例如 `v1.2.3`，会触发 **Publish images and releases**。该流程独立执行 `make ci` 并检查嵌入式前端，然后发布镜像；匿名按 digest 拉取并通过容器健康检查后，创建该标签的 GitHub Release。流程不会自行创建 Git tag。
+- 稳定版本镜像包括 `v1.2.3`、`1.2.3`、`1.2`、`latest` 和对应 `sha-*` 标签。预发布标签例如 `v1.2.3-rc.1` 只发布精确版本与 `sha-*`，GitHub Release 标为 prerelease，不更新稳定版本标签或 `latest`。版本标签接受 `vMAJOR.MINOR.PATCH[-PRERELEASE]`，不接受带 `+build` 的标签。
+- GitHub Release 附带 `nexusdock-<版本>-linux-amd64.tar.gz` 与 `SHA256SUMS`。压缩包包含已嵌入 Web UI 的静态 Linux amd64 二进制、README、`.env.example` 和记录版本/commit 的 `BUILD_INFO`；可执行 `sha256sum --check SHA256SUMS` 校验下载文件。源码运行仍需要 Git 来管理 Recall 的本地版本历史。
+
+AgentDock 与 NexusDock 的候选、正式标签各自发布，不会相互创建标签或自动推进另一仓。需要成对验收时，在本仓手动运行 **Verify paired public images**，传入 AgentDock runtime/dev/browser 与 NexusDock 的四个精确 SHA 标签或 digest；该流程检查匿名拉取、平台 manifest、凭据泄漏、variant 启动、真实 A↔N 配对、Bridge v4 握手、旧指导路由退役、Stage 3 设置和数据卷持久化。正式发布前应确保 `Serialeo/agentdock` 和 `Serialeo/nexusdock` 两个 GHCR container package 均已设为 Public。
