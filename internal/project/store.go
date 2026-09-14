@@ -297,11 +297,11 @@ func (s *Store) CreateDeployment(ctx context.Context, input CreateDeploymentInpu
 	now := s.now().UTC()
 	status := "pending"
 	_, err = s.db.ExecContext(ctx, `INSERT INTO project_deployments(
-		id, project_id, node_id, working_folder, role, purpose, files_permission,
+		id, project_id, node_id, working_folder, role, purpose, files_permission, computer_permission,
 		shell_enabled, browser_enabled, dynamic_mcp_enabled, acp_enabled,
 		desired_revision, applied_revision, enabled, apply_status, last_error, created_at, updated_at
-	) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, '', ?, ?)`,
-		id, projectID, nodeID, working, role, purpose, string(permissions.Files),
+	) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, '', ?, ?)`,
+		id, projectID, nodeID, working, role, purpose, string(permissions.Files), string(permissions.Computer),
 		boolInt(permissions.Shell), boolInt(permissions.Browser), boolInt(permissions.DynamicMCP), boolInt(permissions.ACP),
 		boolInt(input.Enabled), status, formatTime(now), formatTime(now))
 	if err != nil {
@@ -339,10 +339,10 @@ func (s *Store) UpdateDeployment(ctx context.Context, projectID, id string, inpu
 	status := "pending"
 	now := s.now().UTC()
 	result, err := s.db.ExecContext(ctx, `UPDATE project_deployments SET
-		working_folder = ?, role = ?, purpose = ?, files_permission = ?, shell_enabled = ?, browser_enabled = ?, dynamic_mcp_enabled = ?, acp_enabled = ?,
+		working_folder = ?, role = ?, purpose = ?, files_permission = ?, computer_permission = ?, shell_enabled = ?, browser_enabled = ?, dynamic_mcp_enabled = ?, acp_enabled = ?,
 		desired_revision = desired_revision + 1, enabled = ?, apply_status = ?, last_error = '', updated_at = ?
 		WHERE project_id = ? AND id = ? AND desired_revision = ?`,
-		working, role, purpose, string(permissions.Files), boolInt(permissions.Shell), boolInt(permissions.Browser), boolInt(permissions.DynamicMCP), boolInt(permissions.ACP),
+		working, role, purpose, string(permissions.Files), string(permissions.Computer), boolInt(permissions.Shell), boolInt(permissions.Browser), boolInt(permissions.DynamicMCP), boolInt(permissions.ACP),
 		boolInt(input.Enabled), status, formatTime(now), strings.TrimSpace(projectID), strings.TrimSpace(id), expected)
 	if err != nil {
 		return Deployment{}, fmt.Errorf("更新 Deployment: %w", err)
@@ -519,7 +519,7 @@ func (s *Store) deploymentConflictOrNotFound(ctx context.Context, projectID, id 
 	return &RevisionConflictError{Resource: "deployment", Current: revisionString(revision)}
 }
 
-const deploymentSelect = `SELECT id, project_id, node_id, working_folder, role, purpose, files_permission,
+const deploymentSelect = `SELECT id, project_id, node_id, working_folder, role, purpose, files_permission, computer_permission,
 	shell_enabled, browser_enabled, dynamic_mcp_enabled, acp_enabled, desired_revision, applied_revision,
 	enabled, apply_status, last_error, created_at, updated_at FROM project_deployments`
 
@@ -569,14 +569,14 @@ func scanProject(row scanner) (Project, error) {
 
 func scanDeployment(row scanner) (Deployment, error) {
 	var item Deployment
-	var files string
+	var files, computer string
 	var shell, browser, dynamicMCP, acp, desired, applied, enabled int
 	var created, updated string
-	if err := row.Scan(&item.ID, &item.ProjectID, &item.NodeID, &item.WorkingFolder, &item.Role, &item.Purpose, &files,
+	if err := row.Scan(&item.ID, &item.ProjectID, &item.NodeID, &item.WorkingFolder, &item.Role, &item.Purpose, &files, &computer,
 		&shell, &browser, &dynamicMCP, &acp, &desired, &applied, &enabled, &item.ApplyStatus, &item.LastError, &created, &updated); err != nil {
 		return Deployment{}, err
 	}
-	item.Permissions = protocol.DeploymentPermissions{Files: protocol.FileCapability(files), Shell: shell != 0, Browser: browser != 0, DynamicMCP: dynamicMCP != 0, ACP: acp != 0}
+	item.Permissions = protocol.DeploymentPermissions{Files: protocol.FileCapability(files), Computer: protocol.ComputerPermission(computer), Shell: shell != 0, Browser: browser != 0, DynamicMCP: dynamicMCP != 0, ACP: acp != 0}
 	item.DesiredRevision = revisionString(desired)
 	if applied > 0 {
 		item.AppliedRevision = revisionString(applied)
@@ -605,7 +605,7 @@ func validateDeploymentFields(working, role, purpose string, permissions protoco
 		return "", "", "", permissions, invalid("working_folder 不能包含 NUL")
 	}
 	if err := permissions.Validate(); err != nil {
-		return "", "", "", permissions, invalid("permissions.files 无效")
+		return "", "", "", permissions, invalid("permissions 无效: " + err.Error())
 	}
 	return working, role, purpose, permissions, nil
 }

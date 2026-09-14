@@ -48,7 +48,7 @@ func TestWorkTargetRoundTripAndOwnerIsolation(t *testing.T) {
 	stored, err := store.PutWorkTarget(t.Context(), "owner-a", WorkTarget{Target: protocol.WorkTarget{
 		WorkSessionID: session.ID, ProjectID: project.ID, DeploymentID: "deployment-1", NodeID: "node-1", CWDRel: "backend",
 		DeploymentRevision: "rev-3", ContextRevision: "sha256:ctx", Status: protocol.TargetReady,
-		Permissions: protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadWrite, Shell: true},
+		Permissions: protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityReadWrite, Shell: true},
 		Prompt:      protocol.ProjectPrompt{PromptRevision: "sha256:prompt", Complete: true, Bytes: 8, Sources: []protocol.PromptSource{{Path: "AGENTS.md", Scope: ".", SHA256: "sha256:source", Bytes: 8, Content: "rules\n"}}},
 	}, PromptScopes: []protocol.PromptScopeRevision{{Scope: "backend", PromptRevision: "sha256:prompt"}}})
 	if err != nil {
@@ -148,7 +148,7 @@ func putReadyTargetForSessionTest(t *testing.T, store *Store, owner string, sess
 	target, err := store.PutWorkTarget(t.Context(), owner, WorkTarget{Target: protocol.WorkTarget{
 		WorkSessionID: session.ID, ProjectID: projectID, DeploymentID: deploymentID, NodeID: nodeID, CWDRel: ".",
 		DeploymentRevision: "rev-1", ContextRevision: "sha256:ctx-" + deploymentID, Status: protocol.TargetReady,
-		Permissions: protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly},
+		Permissions: protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityReadOnly},
 		Prompt:      protocol.ProjectPrompt{PromptRevision: "sha256:prompt-" + deploymentID, Complete: true, Sources: []protocol.PromptSource{}},
 	}, PromptScopes: []protocol.PromptScopeRevision{{Scope: ".", PromptRevision: "sha256:prompt-" + deploymentID}}})
 	if err != nil {

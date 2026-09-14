@@ -994,16 +994,17 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         ("ok", "node_id", "skill_id", "source", "action"),
     )
     schemas["DeploymentPermissions"] = obj(
-        "Project 执行的有效能力。full_access 来自 Node；working_folder 不是沙箱。",
+        "Project 执行的有效能力。full_access 来自 Node；Full Access 覆盖细粒度权限，但仍受 Node OS 权限与本地停止机制约束；working_folder 不是沙箱。",
         {
             "full_access": scalar("boolean", "Node Full Access 是否生效。true 时允许该 Node 已暴露的全部 Project 执行能力。"),
             "files": enum("Full Access 关闭时的内置文件能力。", ["none", "read_only", "read_write"]),
+            "computer": enum("Full Access 关闭时的 Computer 能力。", ["none", "observe", "control"]),
             "shell": scalar("boolean", "Full Access 关闭时是否允许新命令执行。"),
             "browser": scalar("boolean", "Full Access 关闭时是否允许 Browser 能力。"),
             "dynamic_mcp": scalar("boolean", "Full Access 关闭时是否允许动态 MCP 能力。"),
             "acp": scalar("boolean", "Full Access 关闭时是否允许 ACP 能力。"),
         },
-        ("full_access", "files", "shell", "browser", "dynamic_mcp", "acp"),
+        ("full_access", "files", "computer", "shell", "browser", "dynamic_mcp", "acp"),
     )
     schemas["Project"] = obj(
         "Nexus Project desired state。Project ID 稳定，不随重命名变化。",

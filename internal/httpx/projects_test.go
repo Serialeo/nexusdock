@@ -77,7 +77,7 @@ func TestProjectAdminAPIAuthStrictJSONCASAndOfflineDesiredState(t *testing.T) {
 	windowsPath := `C:\Users\Alice\Source Repo`
 	body, _ := json.Marshal(map[string]any{
 		"node_id": node.ID, "working_folder": windowsPath, "role": "backend", "purpose": "build",
-		"permissions": map[string]any{"files": "read_write", "shell": true, "browser": false, "dynamic_mcp": false, "acp": false},
+		"permissions": map[string]any{"files": "read_write", "computer": "none", "shell": true, "browser": false, "dynamic_mcp": false, "acp": false},
 	})
 	createdDeployment := projectAPIRequest(t, handler, http.MethodPost, "/v1/projects/"+project.ID+"/deployments", string(body))
 	if createdDeployment.Code != http.StatusCreated {
@@ -101,7 +101,7 @@ func TestProjectAdminAPIAuthStrictJSONCASAndOfflineDesiredState(t *testing.T) {
 	}
 	updateBody, _ := json.Marshal(map[string]any{
 		"expected_revision": deployment.DesiredRevision, "working_folder": "", "role": "backend-v2", "purpose": "build-v2", "enabled": true,
-		"permissions": map[string]any{"files": "read_only", "shell": false, "browser": false, "dynamic_mcp": false, "acp": false},
+		"permissions": map[string]any{"files": "read_write", "computer": "none", "shell": true, "browser": false, "dynamic_mcp": false, "acp": false},
 	})
 	updatedDeploymentResponse := projectAPIRequest(t, handler, http.MethodPut, "/v1/projects/"+project.ID+"/deployments/"+deployment.ID, string(updateBody))
 	if updatedDeploymentResponse.Code != http.StatusOK {
@@ -523,7 +523,7 @@ func createProjectThroughAPI(t *testing.T, handler http.Handler, name string) pr
 func deploymentCreateRecorder(handler http.Handler, projectID, nodeID, workingFolder string) *httptest.ResponseRecorder {
 	body, _ := json.Marshal(map[string]any{
 		"node_id": nodeID, "working_folder": workingFolder, "role": "test", "purpose": "test",
-		"permissions": map[string]any{"files": "read_only", "shell": false, "browser": false, "dynamic_mcp": false, "acp": false},
+		"permissions": map[string]any{"files": "read_write", "computer": "none", "shell": true, "browser": false, "dynamic_mcp": false, "acp": false},
 	})
 	request := httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID+"/deployments", strings.NewReader(string(body)))
 	request.Header.Set("Authorization", "Bearer "+projectAPITestToken)

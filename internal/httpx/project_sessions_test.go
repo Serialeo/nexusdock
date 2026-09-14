@@ -21,7 +21,7 @@ func TestProjectSessionHTTPIsProjectScopedAndDoesNotExposeOwnerBinding(t *testin
 	target, err := projects.PutWorkTarget(t.Context(), "mcp:secret-owner-a", projectstore.WorkTarget{Target: protocol.WorkTarget{
 		WorkSessionID: session.ID, ProjectID: first.ID, DeploymentID: "deployment-a", NodeID: "node-a", CWDRel: "backend",
 		DeploymentRevision: "rev-1", ContextRevision: "sha256:ctx-a", Status: protocol.TargetReady,
-		Permissions: protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly, Shell: true},
+		Permissions: protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityReadOnly, Shell: true},
 		Prompt: protocol.ProjectPrompt{PromptRevision: "sha256:prompt-a", Complete: true, Bytes: 5,
 			Sources: []protocol.PromptSource{{Path: "AGENTS.md", Scope: ".", SHA256: "sha256:source-a", Bytes: 5, Content: "rules"}}},
 	}})

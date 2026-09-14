@@ -424,7 +424,7 @@ func bindNodeRoutingTargetForTest(t *testing.T, projects *projectstore.Store, no
 	if err != nil {
 		t.Fatal(err)
 	}
-	permissions := protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadWrite, Shell: true, Browser: true, DynamicMCP: true, ACP: true}
+	permissions := protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityReadWrite, Shell: true, Browser: true, DynamicMCP: true, ACP: true}
 	deployment, err := projects.CreateDeployment(t.Context(), projectstore.CreateDeploymentInput{
 		ProjectID: project.ID, NodeID: node.ID, WorkingFolder: "/tmp/nexusdock-gateway-test", Permissions: permissions, Enabled: true,
 	})

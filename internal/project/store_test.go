@@ -37,7 +37,7 @@ func TestProjectAndDeploymentCASStateMachine(t *testing.T) {
 		t.Fatalf("stale project update error = %#v", err)
 	}
 
-	permissions := protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadWrite, Shell: true, Browser: true, DynamicMCP: true, ACP: true}
+	permissions := protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityReadWrite, Shell: true, Browser: true, DynamicMCP: true, ACP: true}
 	deployment, err := store.CreateDeployment(t.Context(), CreateDeploymentInput{
 		ProjectID: projectID, NodeID: "node-a", WorkingFolder: `D:\Work\My Repo`, Role: "backend", Purpose: "build", Permissions: permissions, Enabled: true,
 	})
@@ -47,7 +47,7 @@ func TestProjectAndDeploymentCASStateMachine(t *testing.T) {
 	if deployment.ID == "" || deployment.ID == deployment.NodeID || deployment.WorkingFolder != `D:\Work\My Repo` || deployment.DesiredRevision != "rev-1" || deployment.AppliedRevision != "" || deployment.ApplyStatus != "pending" {
 		t.Fatalf("created deployment = %#v", deployment)
 	}
-	if _, err := store.CreateDeployment(t.Context(), CreateDeploymentInput{ProjectID: projectID, NodeID: "node-a", WorkingFolder: `C:\other`, Permissions: protocol.DeploymentPermissions{Files: protocol.FileCapabilityNone}, Enabled: true}); !errors.Is(err, ErrDuplicateNode) {
+	if _, err := store.CreateDeployment(t.Context(), CreateDeploymentInput{ProjectID: projectID, NodeID: "node-a", WorkingFolder: `C:\other`, Permissions: protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityNone}, Enabled: true}); !errors.Is(err, ErrDuplicateNode) {
 		t.Fatalf("duplicate node relation error = %v", err)
 	}
 
@@ -114,7 +114,7 @@ func TestLateApplyResultCannotOverwriteNewerDesiredState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	permissions := protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly}
+	permissions := protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityReadOnly}
 	deployment, err := store.CreateDeployment(t.Context(), CreateDeploymentInput{ProjectID: project.ID, NodeID: "node-a", WorkingFolder: "/srv/project", Permissions: permissions, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestDeleteDeploymentStagesRemovalWithoutDeletingWorkingFolder(t *testing.T)
 		t.Fatal(err)
 	}
 	deployment, err := store.CreateDeployment(t.Context(), CreateDeploymentInput{
-		ProjectID: project.ID, NodeID: "node-a", WorkingFolder: working, Permissions: protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly}, Enabled: true,
+		ProjectID: project.ID, NodeID: "node-a", WorkingFolder: working, Permissions: protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityReadOnly}, Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +201,7 @@ func TestDeleteProjectStagesAllDeploymentRemovalsAndPreservesDirectories(t *test
 		if err := os.MkdirAll(paths[i], 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.CreateDeployment(t.Context(), CreateDeploymentInput{ProjectID: project.ID, NodeID: node, WorkingFolder: paths[i], Permissions: protocol.DeploymentPermissions{Files: protocol.FileCapabilityNone}, Enabled: true}); err != nil {
+		if _, err := store.CreateDeployment(t.Context(), CreateDeploymentInput{ProjectID: project.ID, NodeID: node, WorkingFolder: paths[i], Permissions: protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityNone}, Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -234,7 +234,7 @@ func TestDeploymentWorkingFolderUsesTargetOSNativeAbsolutePath(t *testing.T) {
 	insertNodeForProjectTestOS(t, db, "darwin-node", "4", "darwin")
 	insertNodeForProjectTestOS(t, db, "windows-node", "4", "windows")
 	insertNodeForProjectTestOS(t, db, "unknown-node", "4", "")
-	permissions := protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly}
+	permissions := protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityReadOnly}
 
 	for _, test := range []struct {
 		name   string
@@ -286,7 +286,7 @@ func TestDeploymentUpdateRevalidatesWorkingFolderAgainstNodeOS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	permissions := protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly}
+	permissions := protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityReadOnly}
 	deployment, err := store.CreateDeployment(t.Context(), CreateDeploymentInput{
 		ProjectID: project.ID, NodeID: "windows-node", WorkingFolder: `D:\Repo`, Permissions: permissions, Enabled: true,
 	})

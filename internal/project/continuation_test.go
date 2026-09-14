@@ -46,7 +46,7 @@ func newContinuationFixture(t *testing.T) *continuationFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := s.CreateDeployment(t.Context(), CreateDeploymentInput{ProjectID: p.ID, NodeID: f.node, Permissions: protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadWrite, Shell: true}, Enabled: true})
+	d, err := s.CreateDeployment(t.Context(), CreateDeploymentInput{ProjectID: p.ID, NodeID: f.node, Permissions: protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityReadWrite, Shell: true}, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

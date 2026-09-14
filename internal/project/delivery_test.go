@@ -20,7 +20,7 @@ func TestContextDeliveryReturnedHostConsumedAndNewRevision(t *testing.T) {
 	target, err := store.PutWorkTarget(t.Context(), "owner-a", WorkTarget{Target: protocol.WorkTarget{
 		WorkSessionID: session.ID, ProjectID: project.ID, DeploymentID: "deployment-a", NodeID: "node-a", CWDRel: ".",
 		DeploymentRevision: "rev-1", ContextRevision: "sha256:target-v1", Status: protocol.TargetReady,
-		Permissions: protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly},
+		Permissions: protocol.DeploymentPermissions{Computer: protocol.ComputerPermissionNone, Files: protocol.FileCapabilityReadOnly},
 		Prompt:      protocol.ProjectPrompt{PromptRevision: "sha256:prompt", Complete: true, Sources: []protocol.PromptSource{}},
 	}})
 	if err != nil {
