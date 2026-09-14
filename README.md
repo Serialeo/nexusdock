@@ -238,7 +238,7 @@ docker compose up -d
 curl http://127.0.0.1:18777/health
 ```
 
-如果使用固定版本，先把 `image:` 调整到同一 release manifest 验证过的版本对。Project-first 源码使用 **Bridge v4**（`ConnectionProtocolVersion = "4"`），与 Bridge v3 及更早 wire 不兼容；AgentDock 与 NexusDock 必须同时使用包含同一 Bridge v4 契约的 `agentdock-protocol` release。Bridge v4 protocol tag 尚未发布、两仓 `go.mod` 尚未更新到该 tag 时，源码只能通过本地多仓 workspace 联调，**不能**把这种状态当作可发布版本对。升级到 Project-first 版本时会删除旧 Global/Node Instructions 表，而不会迁移其中正文；稳定 Node identity、Project/Deployment/WorkSession、Recall、秘密与其他无关状态继续保留。
+如果使用固定版本，先把 `image:` 调整到同一 release manifest 验证过的版本对。Project-first 源码使用 **Bridge v4**（`ConnectionProtocolVersion = "4"`），与 Bridge v3 及更早 wire 不兼容；AgentDock 与 NexusDock 必须同时使用包含同一 Bridge v4 契约的 `agentdock-protocol` release。AgentDock `v0.9.2` 与 NexusDock `v0.9.2` 均固定依赖 `agentdock-protocol v0.9.2`，请按此版本对统一升级；内置能力开关和 stdio 管理步骤见 [内置能力管理与升级边界](docs/builtin-capabilities.md)。升级到 Project-first 版本时会删除旧 Global/Node Instructions 表，而不会迁移其中正文；稳定 Node identity、Project/Deployment/WorkSession、Recall、秘密与其他无关状态继续保留。
 
 不支持只回滚 AgentDock 或只回滚 NexusDock 到旧 Bridge generation。需要跨 v4 边界回滚时，应同时回滚 A/N，并优先使用升级前的 `nexus-data` 备份恢复控制面数据；不要依赖新版数据库继续为旧运行时代际提供协议兼容。Bridge v4 启动时不会恢复上一 generation 的持久 node-tool 发布缓存，当前节点重新完成 v4 Hello 后会按新契约重建。
 

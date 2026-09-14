@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	filippo.io/age v1.2.1
-	github.com/Serialeo/agentdock-protocol v0.9.2-0.20260914075145-b0beb69cdadb
+	github.com/Serialeo/agentdock-protocol v0.9.2
 	github.com/google/jsonschema-go v0.4.3
 	github.com/gorilla/websocket v1.5.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0

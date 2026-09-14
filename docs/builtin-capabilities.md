@@ -8,7 +8,7 @@ Bridge 对单个节点串行提交完整快照和连接代次，不同节点使�
 
 ## 配套升级
 
-本次按三个仓库 `feat/builtin-capabilities` 的配套实现统一重部署，不支持混合旧版 AgentDock/Nexus，也不迁移旧开关。共享协议依赖为 `v0.9.2-0.20260914075145-b0beb69cdadb`，不是正式 `0.9.2` 发布。连接协议版本号本身不能证明节点支持热更新。
+本次按 AgentDock、NexusDock 和共享协议的 `v0.9.2` 配套版本统一重部署，不支持混合旧版 AgentDock/Nexus，也不迁移旧开关。共享协议依赖为正式版本 `v0.9.2`，热更新管理的最低支持版本为配套的 `v0.9.2`。连接协议版本号本身不能证明节点支持热更新。
 
 先停止旧服务并备份需要保留的数据，清理 AgentDock 启动定义中的旧 browser/ACP 环境开关和 CLI 参数。准备配套构建，先启动 Nexus，再启动所有新版 AgentDock；统一升级完成前暂停工作流流量。首次启用通过 GUI 或 AgentDock 的 `builtins` CLI 选择。详细 stdio 管理命令、损坏配置恢复与启动超时策略见 AgentDock 仓库 `docs/builtin-capabilities.md`。数据库清理或重建由部署人员处理，本次代码修补不执行数据库操作。
 
