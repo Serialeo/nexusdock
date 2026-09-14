@@ -412,12 +412,6 @@ func (s *Server) projectDeploymentAvailability(ctx context.Context, deployment p
 }
 
 func deploymentHasUsableCapability(permissions protocol.DeploymentPermissions, capabilities []string) bool {
-	if permissions.AllowsComputerTool(protocol.ToolComputerObserve) && containsString(capabilities, protocol.ToolComputerObserve) {
-		return true
-	}
-	if permissions.AllowsComputerTool(protocol.ToolComputerAct) && containsString(capabilities, protocol.ToolComputerAct) {
-		return true
-	}
 	if permissions.FullAccess {
 		for _, capability := range []string{"read_file", "exec_command", "browser_session", "mcp_manage", "acp_session"} {
 			if containsString(capabilities, capability) {

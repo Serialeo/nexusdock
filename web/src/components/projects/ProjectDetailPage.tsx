@@ -40,7 +40,7 @@ function messageOf(error: unknown): string {
 }
 
 function permissionsFromDraft(draft: DeploymentDraft): DeploymentPermissions {
-  return { full_access: false, files: draft.files, computer: 'none', shell: draft.shell, browser: draft.browser, dynamic_mcp: draft.dynamicMCP, acp: draft.acp };
+  return { full_access: false, files: draft.files, shell: draft.shell, browser: draft.browser, dynamic_mcp: draft.dynamicMCP, acp: draft.acp };
 }
 
 function draftFromDeployment(value: ProjectDeployment): DeploymentDraft {

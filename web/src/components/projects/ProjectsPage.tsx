@@ -8,12 +8,10 @@ import ProjectDetailPage from './ProjectDetailPage';
 import { deploymentIsAvailable, projectIDFromHash } from './projectUiModel';
 
 export type FileCapability = 'none' | 'read_only' | 'read_write';
-export type ComputerPermission = 'none' | 'observe' | 'control';
 
 export type DeploymentPermissions = {
   full_access: boolean;
   files: FileCapability;
-  computer: ComputerPermission;
   shell: boolean;
   browser: boolean;
   dynamic_mcp: boolean;

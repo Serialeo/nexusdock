@@ -163,7 +163,7 @@ func (s *Server) setMCPAppsEnabled(enabled bool) {
 
 func unavailableAgentDockToolName(name string) bool {
 	name = strings.TrimSpace(name)
-	return name == "file_publish" || (!computerUseEnabled && protocol.IsComputerTool(name))
+	return name == "file_publish"
 }
 
 func (s *Server) registerNodeTools(node agentdock.Node, hello agentdock.Hello) {
@@ -360,18 +360,6 @@ func (s *Server) callNodeTool(ctx context.Context, name string, arguments map[st
 		details := map[string]any{"code": "BRIDGE_PROTOCOL_MISMATCH", "node_id": nodeID, "required_protocol": agentdock.ConnectionProtocolVersion}
 		return s.gatewayToolResult(name, details, errors.New("target AgentDock has not completed the current Bridge v4 handshake"))
 	}
-	if protocol.IsComputerTool(name) {
-		bridgeCapabilities, capabilityErr := s.agentDock.BridgeCapabilities(ctx, nodeID)
-		if capabilityErr != nil {
-			return s.gatewayToolResult(name, nil, capabilityErr)
-		}
-		if !containsString(bridgeCapabilities, protocol.ComputerCapability) {
-			return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorComputerUnsupported, "required_capability": protocol.ComputerCapability}, errors.New("target Node does not implement the native computer contract"))
-		}
-		if !target.Target.Permissions.AllowsComputerTool(name) {
-			return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorCapabilityDenied}, errors.New("Project Deployment denies native desktop access"))
-		}
-	}
 	if !containsString(node.Capabilities, name) {
 		return s.gatewayToolResult(name, nil, fmt.Errorf("AgentDock node %s does not provide tool %s", nodeID, name))
 	}
@@ -421,9 +409,6 @@ func (s *Server) callNodeTool(ctx context.Context, name string, arguments map[st
 }
 
 func allowsHistoricalTargetControl(name string, arguments map[string]any) bool {
-	if protocol.IsComputerTool(name) {
-		return protocol.AllowsHistoricalComputerControl(name, arguments)
-	}
 	action := strings.ToLower(strings.TrimSpace(stringArgument(arguments, "action")))
 	switch name {
 	case "session_observe":

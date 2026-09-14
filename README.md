@@ -355,8 +355,7 @@ AgentDock 与 NexusDock 的候选、正式标签各自发布，不会相互创�
 ### 节点内置能力
 
 在「运行环境 → Nodes → 内置能力」查看并切换指定节点的 browser/ACP。
-界面显示发行包提供、用户选择和后端就绪的实时结果；computer use 当前始终排除，
-Docker ACP 不可开启。开关由 AgentDock 持久化，Nexus 仅通过现有 Runtime Bridge
+界面显示发行包提供、用户选择和后端就绪的实时结果；Docker ACP 不可开启。开关由 AgentDock 持久化，Nexus 仅通过现有 Runtime Bridge
 代理管理请求，离线时不排队写入。开启不会授予 Deployment 权限或恢复旧任务。
 
 节点使用 `node.updated` 发送完整工具快照，汇总目录随之增删并通过 SDK 通知

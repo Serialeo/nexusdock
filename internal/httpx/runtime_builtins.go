@@ -18,7 +18,7 @@ func (s *Server) runtimeBuiltins(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &update) {
 			return
 		}
-		if update.Enabled == nil || (update.ID != "browser" && update.ID != "acp" && update.ID != "computer") {
+		if update.Enabled == nil || (update.ID != "browser" && update.ID != "acp") {
 			writeError(w, http.StatusBadRequest, "INVALID_BUILTIN_UPDATE", "请选择内置能力并指定 enabled")
 			return
 		}

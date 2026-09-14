@@ -375,17 +375,6 @@ func (s *Server) tryApplyProjectDeployment(ctx context.Context, deployment proje
 		Permissions: effectivePermissions, DesiredRevision: deployment.DesiredRevision, AppliedRevision: deployment.DesiredRevision,
 		Enabled: deployment.Enabled, ApplyStatus: applyStatus,
 	}
-	bridgeCapabilities, capabilityErr := s.agentDock.BridgeCapabilities(ctx, node.ID)
-	if capabilityErr == nil {
-		capabilityErr = validateComputerDeploymentCapability(payload, bridgeCapabilities)
-	}
-	if capabilityErr != nil {
-		updated, recordErr := s.projects.RecordApplyResult(ctx, deployment.ProjectID, deployment.ID, deployment.DesiredRevision, capabilityErr)
-		if recordErr == nil {
-			return updated
-		}
-		return deployment
-	}
 	invokeCtx, cancel := context.WithTimeout(ctx, projectNodeApplyTimeout)
 	result, invokeErr := s.agentDockHub.Invoke(invokeCtx, node.ID, protocol.OperationProjectDeploymentApply, payload)
 	cancel()
@@ -487,9 +476,6 @@ func validateProjectDeploymentApplyResult(result map[string]any, expected projec
 	var applied protocol.Deployment
 	if err := json.Unmarshal(encoded, &applied); err != nil {
 		return fmt.Errorf("decode AgentDock apply acknowledgment: %w", err)
-	}
-	if applied.Permissions.Computer != expectedPermissions.Computer {
-		return fmt.Errorf("%s: AgentDock did not preserve computer permissions", protocol.ErrorComputerContractMismatch)
 	}
 	wantStatus := protocol.DeploymentApplyApplied
 	if !expected.Enabled {

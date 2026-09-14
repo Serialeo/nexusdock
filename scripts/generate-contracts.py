@@ -47,7 +47,7 @@ VERSION = scalar("integer", "资源乐观锁版本，从 1 开始。", minimum=1
 def build_schemas() -> dict[str, dict[str, Any]]:
     schemas: dict[str, dict[str, Any]] = {}
     schemas["BuiltinCapability"] = obj("AgentDock 节点拥有的可选内置工具组，与外部 MCP 分离。", {
-        "id": scalar("string", "工具组。", enum=["browser", "acp", "computer"]),
+        "id": scalar("string", "工具组。", enum=["browser", "acp"]),
         "provided": scalar("boolean", "当前发行包是否提供。"),
         "enabled": scalar("boolean", "节点持久化的用户选择。"),
         "ready": scalar("boolean", "后端是否就绪。"),
@@ -57,7 +57,7 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         "tools": array("本组工具归属。", scalar("string", "工具名。")),
     }, ("id", "provided", "enabled", "ready", "available", "transitioning", "reason", "tools"))
     schemas["BuiltinUpdate"] = obj("只修改一个指定节点的用户选择。", {
-        "id": scalar("string", "工具组。", enum=["browser", "acp", "computer"]),
+        "id": scalar("string", "工具组。", enum=["browser", "acp"]),
         "enabled": scalar("boolean", "用户选择；不会授予 Deployment 权限。"),
     }, ("id", "enabled"))
     schemas["BuiltinSnapshot"] = obj("AgentDock 实时返回的状态，不在 Nexus 缓存或回放配置。", {
@@ -1018,13 +1018,12 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         {
             "full_access": scalar("boolean", "Node Full Access 是否生效。true 时允许该 Node 已暴露的全部 Project 执行能力。"),
             "files": enum("Full Access 关闭时的内置文件能力。", ["none", "read_only", "read_write"]),
-            "computer": enum("Full Access 关闭时的 Computer 能力。", ["none", "observe", "control"]),
             "shell": scalar("boolean", "Full Access 关闭时是否允许新命令执行。"),
             "browser": scalar("boolean", "Full Access 关闭时是否允许 Browser 能力。"),
             "dynamic_mcp": scalar("boolean", "Full Access 关闭时是否允许动态 MCP 能力。"),
             "acp": scalar("boolean", "Full Access 关闭时是否允许 ACP 能力。"),
         },
-        ("full_access", "files", "computer", "shell", "browser", "dynamic_mcp", "acp"),
+        ("full_access", "files", "shell", "browser", "dynamic_mcp", "acp"),
     )
     schemas["Project"] = obj(
         "Nexus Project desired state。Project ID 稳定，不随重命名变化。",

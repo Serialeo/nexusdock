@@ -6,7 +6,7 @@ export type BuiltinCapability = {
   available: boolean; transitioning: boolean; reason: string; tools: string[];
 };
 type Snapshot = { ok: boolean; node_id: string; builtins: BuiltinCapability[] };
-const labels: Record<string, string> = { browser: '浏览器 CDP', acp: 'Coding Agent（ACP）', computer: '桌面控制' };
+const labels: Record<string, string> = { browser: '浏览器 CDP', acp: 'Coding Agent（ACP）' };
 
 export default function BuiltinCapabilities({ nodeID, online }: { nodeID: string; online: boolean }) {
   const [states, setStates] = useState<BuiltinCapability[]>([]);
