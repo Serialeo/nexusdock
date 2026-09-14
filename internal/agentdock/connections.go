@@ -39,10 +39,11 @@ type nodeConnection struct {
 }
 
 type Hub struct {
-	store   *Store
-	mu      sync.RWMutex
-	nodes   map[string]*nodeConnection
-	onHello func(Node, Hello)
+	store      *Store
+	mu         sync.RWMutex
+	nodes      map[string]*nodeConnection
+	onHello    func(Node, Hello)
+	snapshotMu sync.Mutex
 }
 
 func (h *Hub) SetHelloHandler(handler func(Node, Hello)) {
@@ -105,6 +106,8 @@ func (h *Hub) Accept(w http.ResponseWriter, r *http.Request, nodeID string) erro
 		connection.close(errors.New("invalid AgentDock handshake"))
 		return errors.New("AgentDock 节点握手无效")
 	}
+	h.snapshotMu.Lock()
+	defer h.snapshotMu.Unlock()
 	updated, err := h.store.UpdateHello(r.Context(), nodeID, *first.Hello)
 	if err != nil {
 		connection.close(err)
@@ -202,6 +205,27 @@ func (h *Hub) readLoop(connection *nodeConnection) {
 		}
 		_ = connection.socket.SetReadDeadline(time.Now().Add(2 * heartbeatInterval))
 		switch message.Type {
+		case protocol.MessageNodeUpdated:
+			if message.Hello == nil || message.ProtocolVersion != ConnectionProtocolVersion || message.Hello.ProtocolVersion != ConnectionProtocolVersion {
+				return
+			}
+			h.snapshotMu.Lock()
+			h.mu.RLock()
+			current := h.nodes[connection.nodeID] == connection
+			onHello := h.onHello
+			h.mu.RUnlock()
+			if !current {
+				h.snapshotMu.Unlock()
+				return
+			}
+			updated, err := h.store.UpdateHello(context.Background(), connection.nodeID, *message.Hello)
+			if err == nil && onHello != nil {
+				onHello(updated, *message.Hello)
+			}
+			h.snapshotMu.Unlock()
+			if err != nil {
+				return
+			}
 		case protocol.MessageToolResult:
 			connection.resolve(message.RequestID, pendingResult{result: message.Result})
 		case protocol.MessageToolError:

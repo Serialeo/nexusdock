@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNo
 import { CirclePlus, Pencil, RefreshCw, Server, Trash2 } from 'lucide-react';
 import { api } from '../../api/client';
 import Dialog from '../Dialog';
+import BuiltinCapabilities from './BuiltinCapabilities';
 
 const selectedNodeStorageKey = 'nexus:runtime-node-id';
 
@@ -98,6 +99,7 @@ export function AgentDockNodesPanel({ nodes, selectedNodeID, loading, error, onR
   onReload: () => void;
   onSelect: (nodeID: string) => void;
 }) {
+  const [capabilityNode, setCapabilityNode] = useState<AgentDockNode | null>(null);
   const [editing, setEditing] = useState<AgentDockNode | null>(null);
   const [editName, setEditName] = useState('');
   const [editEnabled, setEditEnabled] = useState(true);
@@ -184,11 +186,16 @@ export function AgentDockNodesPanel({ nodes, selectedNodeID, loading, error, onR
           <span className={`agentdock-node-status ${node.online ? 'is-online' : 'is-offline'}`}><strong>{node.online ? '在线' : '离线'}</strong><span>· {node.full_access ? 'Full Access' : '按 Deployment 权限'} · {node.capabilities?.length || 0} 个节点工具{node.last_seen_at ? ` · 最近 ${new Date(node.last_seen_at).toLocaleString()}` : ''}</span></span>
         </div>
         <div className="agentdock-node-row-actions">
+ <button type="button" className="nx-button is-secondary is-small" onClick={() => setCapabilityNode(node)}>内置能力</button>
           <button type="button" className="nx-button is-secondary is-small" disabled={!!busy} onClick={() => openEdit(node)}><Pencil size={14} />编辑</button>
           <button type="button" className="nx-button is-danger is-small" disabled={!!busy} onClick={() => setDeleting(node)}><Trash2 size={14} />删除</button>
         </div>
       </article>)}
     </div>
+
+    {capabilityNode && <Dialog title={`${capabilityNode.name} · 内置能力`} description={`配置作用于节点 ${capabilityNode.id}`} onClose={() => { setCapabilityNode(null); onReload(); }}>
+      <BuiltinCapabilities key={capabilityNode.id} nodeID={capabilityNode.id} online={!!nodes.find((node) => node.id === capabilityNode.id)?.online} />
+    </Dialog>}
 
     {pairing && <Dialog title="配对 AgentDock" description={`配对码将在 ${new Date(pairing.expires_at).toLocaleString()} 失效，且只能使用一次。`} onClose={() => setPairing(null)} wide>
       <div className="agentdock-node-delete"><p>在目标设备执行以下命令，然后重启 AgentDock：</p><code>{pairCommand}</code><footer><button type="button" className="nx-button" onClick={() => void navigator.clipboard.writeText(pairCommand)}>复制命令</button></footer></div>

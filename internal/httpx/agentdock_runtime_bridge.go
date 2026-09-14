@@ -58,7 +58,11 @@ func (s *Server) runtimeRequest(ctx context.Context, nodeID, method, path string
 		return nil, agentDockRuntimeError{Code: "AGENTDOCK_CONNECTION_UNAVAILABLE", Message: "AgentDock 节点连接服务不可用"}
 	}
 	// 与 AgentDock direct Runtime API 保持同样的 8 秒边界；调用方已有更短 deadline 时不会被延长。
-	requestCtx, cancel := context.WithTimeout(ctx, agentDockRuntimeRequestTimeout)
+	timeout := agentDockRuntimeRequestTimeout
+	if path == "/internal/runtime/builtins" {
+		timeout = 30 * time.Second
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if s.agentDock != nil {
 		if _, err := s.agentDock.Get(requestCtx, nodeID); err != nil {

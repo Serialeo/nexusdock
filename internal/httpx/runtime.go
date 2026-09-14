@@ -102,6 +102,8 @@ type opsSkillFileContent struct {
 
 func (s *Server) registerRuntimeRoutes(mux *http.ServeMux, protected func(http.HandlerFunc) http.HandlerFunc) {
 	s.registerAgentDockNodeRoutes(mux, protected)
+	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/builtins", protected(s.runtimeBuiltins))
+	mux.HandleFunc("POST /v1/runtime/nodes/{nodeID}/builtins", protected(s.runtimeBuiltins))
 	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/overview", protected(s.runtimeOverview))
 	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/files", protected(s.runtimeFiles))
 	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/tasks", protected(s.runtimeTasks))

@@ -351,3 +351,15 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 - GitHub Release 附带 `nexusdock-<版本>-linux-amd64.tar.gz` 与 `SHA256SUMS`。压缩包包含已嵌入 Web UI 的静态 Linux amd64 二进制、README、`.env.example` 和记录版本/commit 的 `BUILD_INFO`；可执行 `sha256sum --check SHA256SUMS` 校验下载文件。源码运行仍需要 Git 来管理 Recall 的本地版本历史。
 
 AgentDock 与 NexusDock 的候选、正式标签各自发布，不会相互创建标签或自动推进另一仓。需要成对验收时，在本仓手动运行 **Verify paired public images**，传入 AgentDock runtime/dev/browser 与 NexusDock 的四个精确 SHA 标签或 digest；该流程检查匿名拉取、平台 manifest、凭据泄漏、variant 启动、真实 A↔N 配对、Bridge v4 握手、旧指导路由退役、Stage 3 设置和数据卷持久化。正式发布前应确保 `Serialeo/agentdock` 和 `Serialeo/nexusdock` 两个 GHCR container package 均已设为 Public。
+
+### 节点内置能力
+
+在「运行环境 → Nodes → 内置能力」查看并切换指定节点的 browser/ACP。
+界面显示发行包提供、用户选择和后端就绪的实时结果；computer use 当前始终排除，
+Docker ACP 不可开启。开关由 AgentDock 持久化，Nexus 仅通过现有 Runtime Bridge
+代理管理请求，离线时不排队写入。开启不会授予 Deployment 权限或恢复旧任务。
+
+节点使用 `node.updated` 发送完整工具快照，汇总目录随之增删并通过 SDK 通知
+已订阅 `subscriptions/listen` 的 MCP 客户端。未订阅的客户端需重新列出工具，
+缓存工具调用仍受 AgentDock 运行时门禁约束。节点离线沿用现有契约保留策略，
+调用返回离线错误；重连只采用该节点新上报的实际状态。

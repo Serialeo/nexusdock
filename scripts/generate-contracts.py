@@ -46,6 +46,26 @@ VERSION = scalar("integer", "资源乐观锁版本，从 1 开始。", minimum=1
 
 def build_schemas() -> dict[str, dict[str, Any]]:
     schemas: dict[str, dict[str, Any]] = {}
+    schemas["BuiltinCapability"] = obj("AgentDock 节点拥有的可选内置工具组，与外部 MCP 分离。", {
+        "id": scalar("string", "工具组。", enum=["browser", "acp", "computer"]),
+        "provided": scalar("boolean", "当前发行包是否提供。"),
+        "enabled": scalar("boolean", "节点持久化的用户选择。"),
+        "ready": scalar("boolean", "后端是否就绪。"),
+        "available": scalar("boolean", "provided、enabled、ready 且不在切换中。"),
+        "transitioning": scalar("boolean", "正在切换，拒绝新调用。"),
+        "reason": scalar("string", "不可用或切换中的原因。"),
+        "tools": array("本组工具归属。", scalar("string", "工具名。")),
+    }, ("id", "provided", "enabled", "ready", "available", "transitioning", "reason", "tools"))
+    schemas["BuiltinUpdate"] = obj("只修改一个指定节点的用户选择。", {
+        "id": scalar("string", "工具组。", enum=["browser", "acp", "computer"]),
+        "enabled": scalar("boolean", "用户选择；不会授予 Deployment 权限。"),
+    }, ("id", "enabled"))
+    schemas["BuiltinSnapshot"] = obj("AgentDock 实时返回的状态，不在 Nexus 缓存或回放配置。", {
+        "ok": scalar("boolean", "请求成功。"),
+        "source": scalar("string", "配置真源。", enum=["agentdock"]),
+        "node_id": scalar("string", "目标节点。"),
+        "builtins": array("实时内置能力状态。", ref("BuiltinCapability")),
+    }, ("ok", "source", "node_id", "builtins"))
     schemas["JsonObject"] = obj("通用结构化对象。", {}, additional=True)
     schemas["ErrorDetail"] = obj(
         "字段级错误详情。",
@@ -1783,6 +1803,10 @@ def build_openapi(schemas: dict[str, Any]) -> dict[str, Any]:
         },
         "/v1/runtime/nodes/{nodeID}/skills/{source}/{skillID}/manage": {
             "post": operation("manageRuntimeSkill", "管理目标 AgentDock 已安装 Skill 的激活版本或隔离环境", params=[p("RuntimeNodeId"), p("RuntimeSkillSource"), p("RuntimeSkillId")], request=body(ref("RuntimeSkillManageRequest")), success=ok(ref("RuntimeSkillManageResponse")))
+        },
+        "/v1/runtime/nodes/{nodeID}/builtins": {
+            "get": operation("listRuntimeBuiltins", "读取指定节点的内置能力实时状态", params=[p("RuntimeNodeId")], success=ok(ref("BuiltinSnapshot"))),
+            "post": operation("updateRuntimeBuiltin", "设置指定节点的内置能力开关，配置保存在 AgentDock", params=[p("RuntimeNodeId")], request=body(ref("BuiltinUpdate")), success=ok(ref("BuiltinSnapshot"))),
         },
         "/v1/runtime/nodes/{nodeID}/mcp": {
             "get": operation("listRuntimeMCPServers", "列出指定 AgentDock 节点的动态 MCP 服务", params=[p("RuntimeNodeId")]),
