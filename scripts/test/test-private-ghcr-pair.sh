@@ -46,9 +46,9 @@ trap cleanup EXIT INT TERM
 
 container_logs() {
   echo "===== NexusDock logs =====" >&2
-  docker logs "$nexus_container" >&2 2>/dev/null || true
+  docker logs "$nexus_container" >&2 2>&1 || true
   echo "===== AgentDock logs =====" >&2
-  docker logs "$agent_container" >&2 2>/dev/null || true
+  docker logs "$agent_container" >&2 2>&1 || true
 }
 
 fail() {
