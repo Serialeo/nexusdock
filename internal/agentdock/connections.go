@@ -136,6 +136,16 @@ func (h *Hub) Accept(w http.ResponseWriter, r *http.Request, nodeID string) erro
 	connection.snapshotHash = sha256.Sum256(initialSnapshot)
 	_ = socket.SetReadDeadline(time.Now().Add(2 * heartbeatInterval))
 
+	// AgentDock 要求首条消息为 node.ready；必须先写入成功，再发布可调用连接。
+	// 仅持有本节点的快照锁，慢握手不会阻塞其他节点；失败也不替换旧连接。
+	if err := connection.write(connectionMessage{
+		Type: protocol.MessageNodeReady, ProtocolVersion: ConnectionProtocolVersion, HeartbeatMS: int(heartbeatInterval / time.Millisecond),
+	}); err != nil {
+		snapshotLock.Unlock()
+		connection.close(err)
+		return fmt.Errorf("确认 AgentDock 握手: %w", err)
+	}
+
 	h.mu.Lock()
 	previous := h.nodes[nodeID]
 	h.nodes[nodeID] = connection
@@ -149,17 +159,6 @@ func (h *Hub) Accept(w http.ResponseWriter, r *http.Request, nodeID string) erro
 	}
 
 	snapshotLock.Unlock()
-	if err := connection.write(connectionMessage{
-		Type: protocol.MessageNodeReady, ProtocolVersion: ConnectionProtocolVersion, HeartbeatMS: int(heartbeatInterval / time.Millisecond),
-	}); err != nil {
-		h.mu.Lock()
-		if h.nodes[nodeID] == connection {
-			delete(h.nodes, nodeID)
-		}
-		h.mu.Unlock()
-		connection.close(err)
-		return fmt.Errorf("确认 AgentDock 握手: %w", err)
-	}
 
 	go h.readLoop(connection)
 	return nil

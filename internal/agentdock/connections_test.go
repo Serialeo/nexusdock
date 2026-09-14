@@ -72,6 +72,111 @@ func TestHubInvokesConnectedNode(t *testing.T) {
 	}
 }
 
+func TestHandshakeReadyPrecedesInvocationsDuringCatalogPublication(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		operation string
+		reconnect bool
+	}{
+		{name: "initial runtime request", operation: protocol.OperationRuntimeRequest},
+		{name: "reconnected tool call", operation: protocol.OperationToolCall, reconnect: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, _ := newTestStore(t)
+			pairing, err := store.CreatePairingCode(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			node, err := store.Pair(t.Context(), PairInput{Code: pairing.Code, DeviceID: "ready-order", Name: "ReadyOrder"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			hub := NewHub(store)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			accepted := make(chan error, 2)
+			publishing, release := make(chan struct{}), make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				accepted <- hub.Accept(w, r, node.ID)
+			}))
+			defer func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+				hub.Disconnect(node.ID)
+				server.Close()
+			}()
+			connect := func() *websocket.Conn {
+				t.Helper()
+				socket, _, err := websocket.DefaultDialer.DialContext(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = socket.Close() })
+				_ = socket.SetReadDeadline(time.Now().Add(5 * time.Second))
+				if err := socket.WriteJSON(connectionMessage{Type: protocol.MessageNodeHello, ProtocolVersion: ConnectionProtocolVersion,
+					Hello: &Hello{DeviceID: node.DeviceID, ProtocolVersion: ConnectionProtocolVersion, UIResources: []UIResourceCapability{}},
+				}); err != nil {
+					t.Fatal(err)
+				}
+				return socket
+			}
+			if test.reconnect {
+				previous := connect()
+				var ready connectionMessage
+				if err := previous.ReadJSON(&ready); err != nil || ready.Type != protocol.MessageNodeReady {
+					t.Fatalf("previous ready=%#v err=%v", ready, err)
+				}
+				select {
+				case err := <-accepted:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+			}
+			hub.SetHelloHandler(func(Node, Hello) {
+				close(publishing)
+				<-release
+			})
+			socket := connect()
+			select {
+			case <-publishing:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			// 固定停在目录回调内发起真实调用，旧实现会把 tool.invoke 写在 node.ready 前面。
+			invoked := make(chan error, 1)
+			go func() {
+				_, err := hub.Invoke(ctx, node.ID, test.operation, map[string]any{})
+				invoked <- err
+			}()
+			var first, invoke connectionMessage
+			if err := socket.ReadJSON(&first); err != nil || first.Type != protocol.MessageNodeReady {
+				t.Fatalf("first Bridge message must be node.ready: %#v, err=%v", first, err)
+			}
+			if err := socket.ReadJSON(&invoke); err != nil || invoke.Type != protocol.MessageToolInvoke || invoke.Operation != test.operation {
+				t.Fatalf("invoke=%#v err=%v", invoke, err)
+			}
+			close(release)
+			if err := socket.WriteJSON(connectionMessage{Type: protocol.MessageToolResult, RequestID: invoke.RequestID, Result: []byte(`{"ok":true}`)}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-invoked:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		})
+	}
+}
+
 func TestHubRejectsStructurallyInvalidBridgeV2UIResourceHandshake(t *testing.T) {
 	tests := []struct {
 		name  string
