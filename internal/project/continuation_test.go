@@ -550,3 +550,41 @@ func TestContinuationSourcePartitionExactSelectionAndSingleClaim(t *testing.T) {
 		t.Fatal("finish returned another Wake")
 	}
 }
+
+func TestContinuationPollingIsReadOnlyAndPersistsExpiry(t *testing.T) {
+	f := newContinuationFixture(t)
+	f.control(t, protocol.WorkContinuationInput{Action: "enable", Confirmed: true})
+	in := f.bind(t)
+	f.await(t, "one")
+	f.record(t, "one")
+	snapshot := func() string {
+		t.Helper()
+		var raw string
+		if err := f.db.QueryRow("SELECT document_json FROM work_continuations WHERE work_session_id = ?", in.WorkSessionID).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	before := snapshot()
+	f.now = f.now.Add(time.Second)
+	f.control(t, protocol.WorkContinuationInput{Action: "status"})
+	f.app(t, "state", in)
+	if snapshot() != before {
+		t.Fatal("polling rewrote continuation document")
+	}
+	first := f.app(t, "acquire", in)
+	f.now = f.now.Add(31 * time.Second)
+	expired := f.app(t, "state", in)
+	if expired.Wake == nil || string(expired.Wake.State) != "pending" {
+		t.Fatalf("claim not expired: %#v", expired)
+	}
+	persisted := snapshot()
+	f.control(t, protocol.WorkContinuationInput{Action: "status"})
+	if snapshot() != persisted {
+		t.Fatal("already expired wake was rewritten")
+	}
+	second := f.app(t, "acquire", in)
+	if first.AttemptID == second.AttemptID {
+		t.Fatal("expired attempt reused")
+	}
+}

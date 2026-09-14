@@ -125,6 +125,40 @@ func (s *Store) changeContinuation(ctx context.Context, owner, ws string, fn fun
 	}
 	return result, nil
 }
+
+// 轮询只读快照；需要过期转换时重新加写锁并重读，不能保存旧快照。
+func (s *Store) readContinuation(ctx context.Context, owner, ws string, validate func(*continuationDocument, time.Time) error) (protocol.WorkContinuationResult, error) {
+	if s == nil || s.db == nil {
+		return protocol.WorkContinuationResult{}, errors.New("Project store 未初始化")
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return protocol.WorkContinuationResult{}, err
+	}
+	d, err := loadContinuation(ctx, conn, owner, ws)
+	conn.Close()
+	if err != nil {
+		return protocol.WorkContinuationResult{}, err
+	}
+	now := s.now().UTC()
+	if validate != nil {
+		if err := validate(&d, now); err != nil {
+			return protocol.WorkContinuationResult{}, err
+		}
+	}
+	if !expireContinuation(&d, now) {
+		return continuationResult(&d), nil
+	}
+	return s.changeContinuation(ctx, owner, ws, func(_ *sql.Conn, current *continuationDocument, now time.Time) (protocol.WorkContinuationResult, error) {
+		if validate != nil {
+			if err := validate(current, now); err != nil {
+				return protocol.WorkContinuationResult{}, err
+			}
+		}
+		return continuationResult(current), nil
+	})
+}
+
 func continuationSecret() (string, error) {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -177,7 +211,8 @@ func failContinuation(d *continuationDocument, reason string) {
 		d.State.Phase = "circuit_open"
 	}
 }
-func expireContinuation(d *continuationDocument, now time.Time) {
+func expireContinuation(d *continuationDocument, now time.Time) bool {
+	changed := false
 	for i := range d.Wakes {
 		w := &d.Wakes[i]
 		a := attemptForWake(d, w.WakeID)
@@ -187,12 +222,14 @@ func expireContinuation(d *continuationDocument, now time.Time) {
 		switch string(w.State) {
 		case "claimed":
 			if isExpired(a.Value.LeaseExpiresAt, now) {
+				changed = true
 				wakeState(w, "pending", now)
 				a.Value.State = protocol.WorkWakeState("delivery_rejected")
 				a.Value.LastError = "claim expired before dispatch"
 			}
 		case "prepared", "dispatch_accepted":
 			if isExpired(a.Value.LeaseExpiresAt, now) {
+				changed = true
 				wakeState(w, "delivery_unknown", now)
 				a.Value.State = w.State
 				failContinuation(d, "dispatch outcome requires inspection")
@@ -203,6 +240,7 @@ func expireContinuation(d *continuationDocument, now time.Time) {
 		case "consumed":
 			t, err := time.Parse(time.RFC3339Nano, a.Value.ConsumedAt)
 			if err != nil || !now.Before(t.Add(continuationSettlementTimeout)) {
+				changed = true
 				wakeState(w, "needs_attention", now)
 				a.Value.State = w.State
 				d.State.Phase = "needs_attention"
@@ -210,7 +248,9 @@ func expireContinuation(d *continuationDocument, now time.Time) {
 			}
 		}
 	}
+	return changed
 }
+
 func continuationResult(d *continuationDocument) protocol.WorkContinuationResult {
 	selected := ""
 	for _, w := range d.Wakes {
@@ -278,6 +318,9 @@ func validateWakeTargets(ctx context.Context, conn *sql.Conn, w *protocol.WorkWa
 }
 
 func (s *Store) ControlContinuation(ctx context.Context, owner string, in protocol.WorkContinuationInput) (protocol.WorkContinuationResult, error) {
+	if in.Action == "status" {
+		return s.readContinuation(ctx, owner, in.WorkSessionID, nil)
+	}
 	return s.changeContinuation(ctx, owner, in.WorkSessionID, func(conn *sql.Conn, d *continuationDocument, now time.Time) (protocol.WorkContinuationResult, error) {
 		switch in.Action {
 		case "status":
@@ -435,6 +478,9 @@ func controllerIdentity(d *continuationDocument, in protocol.ContinuationControl
 	return nil
 }
 func (s *Store) ControllerContinuation(ctx context.Context, owner, action string, in protocol.ContinuationControllerInput) (protocol.WorkContinuationResult, error) {
+	if action == "state" {
+		return s.readContinuation(ctx, owner, in.WorkSessionID, func(d *continuationDocument, now time.Time) error { return controllerIdentity(d, in, now, true) })
+	}
 	return s.changeContinuation(ctx, owner, in.WorkSessionID, func(conn *sql.Conn, d *continuationDocument, now time.Time) (protocol.WorkContinuationResult, error) {
 		if err := controllerIdentity(d, in, now, action != "bind"); err != nil {
 			return protocol.WorkContinuationResult{}, err
