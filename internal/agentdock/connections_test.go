@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -188,5 +189,86 @@ func TestHubRejectsPreviousBridgeProtocolGeneration(t *testing.T) {
 	}
 	if hub.Online(node.ID) {
 		t.Fatal("Bridge v3 node was marked online")
+	}
+}
+
+func TestSlowNodeSnapshotDoesNotBlockOtherNodesAndDuplicatesAreCoalesced(t *testing.T) {
+	store, _ := newTestStore(t)
+	nodes := make([]Node, 2)
+	for i, id := range []string{"slow-device", "fast-device"} {
+		pairing, err := store.CreatePairingCode(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		pair, err := store.Pair(t.Context(), PairInput{Code: pairing.Code, DeviceID: id, Name: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		nodes[i], err = store.Get(t.Context(), pair.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	hub := NewHub(store)
+	slowEntered, release := make(chan struct{}), make(chan struct{})
+	var fastCallbacks atomic.Int32
+	hub.SetHelloHandler(func(node Node, hello Hello) {
+		if node.ID == nodes[0].ID {
+			close(slowEntered)
+			<-release
+		} else {
+			fastCallbacks.Add(1)
+		}
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _ = hub.Accept(w, r, r.URL.Query().Get("node")) }))
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		server.Close()
+	}()
+	connect := func(node Node) *websocket.Conn {
+		t.Helper()
+		c, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"?node="+node.ID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		hello := &Hello{DeviceID: node.DeviceID, ProtocolVersion: ConnectionProtocolVersion, Capabilities: []string{}, UIResources: []UIResourceCapability{}}
+		if err := c.WriteJSON(connectionMessage{Type: protocol.MessageNodeHello, ProtocolVersion: ConnectionProtocolVersion, Hello: hello}); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	slow := connect(nodes[0])
+	_ = slow
+	select {
+	case <-slowEntered:
+	case <-time.After(time.Second):
+		t.Fatal("slow callback not reached")
+	}
+	fast := connect(nodes[1])
+	_ = fast.SetReadDeadline(time.Now().Add(time.Second))
+	var ready connectionMessage
+	if err := fast.ReadJSON(&ready); err != nil {
+		t.Fatalf("unrelated node blocked: %v", err)
+	}
+	hello := &Hello{DeviceID: nodes[1].DeviceID, ProtocolVersion: ConnectionProtocolVersion, Capabilities: []string{}, UIResources: []UIResourceCapability{}}
+	for i := 0; i < 4; i++ {
+		if err := fast.WriteJSON(connectionMessage{Type: protocol.MessageNodeUpdated, ProtocolVersion: ConnectionProtocolVersion, Hello: hello}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 心跳排在快照之后，收到确认说明前面的重复快照均已处理。
+	if err := fast.WriteJSON(connectionMessage{Type: protocol.MessageNodeHeartbeat}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fast.ReadJSON(&ready); err != nil {
+		t.Fatal(err)
+	}
+	if fastCallbacks.Load() != 1 {
+		t.Fatalf("duplicate reconciliations=%d", fastCallbacks.Load())
 	}
 }

@@ -2,6 +2,7 @@ package agentdock
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,20 +31,21 @@ type pendingResult struct {
 }
 
 type nodeConnection struct {
-	nodeID  string
-	socket  *websocket.Conn
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	pending map[string]chan pendingResult
-	closed  bool
+	nodeID       string
+	socket       *websocket.Conn
+	writeMu      sync.Mutex
+	mu           sync.Mutex
+	pending      map[string]chan pendingResult
+	closed       bool
+	snapshotHash [32]byte
 }
 
 type Hub struct {
-	store      *Store
-	mu         sync.RWMutex
-	nodes      map[string]*nodeConnection
-	onHello    func(Node, Hello)
-	snapshotMu sync.Mutex
+	store         *Store
+	mu            sync.RWMutex
+	nodes         map[string]*nodeConnection
+	onHello       func(Node, Hello)
+	snapshotLocks map[string]*sync.Mutex
 }
 
 func (h *Hub) SetHelloHandler(handler func(Node, Hello)) {
@@ -53,7 +55,19 @@ func (h *Hub) SetHelloHandler(handler func(Node, Hello)) {
 }
 
 func NewHub(store *Store) *Hub {
-	return &Hub{store: store, nodes: make(map[string]*nodeConnection)}
+	return &Hub{store: store, nodes: make(map[string]*nodeConnection), snapshotLocks: make(map[string]*sync.Mutex)}
+}
+
+// 按节点串行提交，避免慢节点的目录协调阻塞其他节点。
+func (h *Hub) snapshotLock(nodeID string) *sync.Mutex {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	lock := h.snapshotLocks[nodeID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		h.snapshotLocks[nodeID] = lock
+	}
+	return lock
 }
 
 func (h *Hub) Online(nodeID string) bool {
@@ -106,19 +120,20 @@ func (h *Hub) Accept(w http.ResponseWriter, r *http.Request, nodeID string) erro
 		connection.close(errors.New("invalid AgentDock handshake"))
 		return errors.New("AgentDock 节点握手无效")
 	}
-	h.snapshotMu.Lock()
-	defer h.snapshotMu.Unlock()
+	initialSnapshot, err := json.Marshal(first.Hello)
+	if err != nil {
+		connection.close(err)
+		return fmt.Errorf("编码 AgentDock 初始快照: %w", err)
+	}
+	snapshotLock := h.snapshotLock(nodeID)
+	snapshotLock.Lock()
 	updated, err := h.store.UpdateHello(r.Context(), nodeID, *first.Hello)
 	if err != nil {
+		snapshotLock.Unlock()
 		connection.close(err)
 		return err
 	}
-	if err := connection.write(connectionMessage{
-		Type: protocol.MessageNodeReady, ProtocolVersion: ConnectionProtocolVersion, HeartbeatMS: int(heartbeatInterval / time.Millisecond),
-	}); err != nil {
-		connection.close(err)
-		return fmt.Errorf("确认 AgentDock 握手: %w", err)
-	}
+	connection.snapshotHash = sha256.Sum256(initialSnapshot)
 	_ = socket.SetReadDeadline(time.Now().Add(2 * heartbeatInterval))
 
 	h.mu.Lock()
@@ -131,6 +146,19 @@ func (h *Hub) Accept(w http.ResponseWriter, r *http.Request, nodeID string) erro
 	}
 	if onHello != nil {
 		onHello(updated, *first.Hello)
+	}
+
+	snapshotLock.Unlock()
+	if err := connection.write(connectionMessage{
+		Type: protocol.MessageNodeReady, ProtocolVersion: ConnectionProtocolVersion, HeartbeatMS: int(heartbeatInterval / time.Millisecond),
+	}); err != nil {
+		h.mu.Lock()
+		if h.nodes[nodeID] == connection {
+			delete(h.nodes, nodeID)
+		}
+		h.mu.Unlock()
+		connection.close(err)
+		return fmt.Errorf("确认 AgentDock 握手: %w", err)
 	}
 
 	go h.readLoop(connection)
@@ -209,20 +237,34 @@ func (h *Hub) readLoop(connection *nodeConnection) {
 			if message.Hello == nil || message.ProtocolVersion != ConnectionProtocolVersion || message.Hello.ProtocolVersion != ConnectionProtocolVersion {
 				return
 			}
-			h.snapshotMu.Lock()
+			snapshotLock := h.snapshotLock(connection.nodeID)
+			snapshotLock.Lock()
 			h.mu.RLock()
 			current := h.nodes[connection.nodeID] == connection
 			onHello := h.onHello
 			h.mu.RUnlock()
 			if !current {
-				h.snapshotMu.Unlock()
+				snapshotLock.Unlock()
 				return
 			}
-			updated, err := h.store.UpdateHello(context.Background(), connection.nodeID, *message.Hello)
-			if err == nil && onHello != nil {
-				onHello(updated, *message.Hello)
+			snapshot, err := json.Marshal(message.Hello)
+			if err != nil {
+				snapshotLock.Unlock()
+				return
 			}
-			h.snapshotMu.Unlock()
+			hash := sha256.Sum256(snapshot)
+			if hash == connection.snapshotHash {
+				snapshotLock.Unlock()
+				continue
+			}
+			updated, err := h.store.UpdateHello(context.Background(), connection.nodeID, *message.Hello)
+			if err == nil {
+				connection.snapshotHash = hash
+				if onHello != nil {
+					onHello(updated, *message.Hello)
+				}
+			}
+			snapshotLock.Unlock()
 			if err != nil {
 				return
 			}
