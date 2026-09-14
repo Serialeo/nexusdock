@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestComputerDeploymentRequiresCapabilityWithoutWireFallback(t *testing.T) {
+func TestComputerDeploymentDisabledEvenWithNodeCapability(t *testing.T) {
 	for _, full := range []bool{false, true} {
 		for _, level := range []protocol.ComputerPermission{protocol.ComputerPermissionNone, protocol.ComputerPermissionObserve, protocol.ComputerPermissionControl} {
 			deployment := protocol.Deployment{Permissions: protocol.DeploymentPermissions{Files: protocol.FileCapabilityNone, Computer: level, FullAccess: full}}
@@ -19,8 +19,8 @@ func TestComputerDeploymentRequiresCapabilityWithoutWireFallback(t *testing.T) {
 			} else if err == nil || !strings.Contains(err.Error(), protocol.ErrorComputerUnsupported) {
 				t.Fatalf("missing native implementation accepted: %v", err)
 			}
-			if err := validateComputerDeploymentCapability(deployment, []string{protocol.ComputerCapability}); err != nil {
-				t.Fatal(err)
+			if err := validateComputerDeploymentCapability(deployment, []string{protocol.ComputerCapability}); (err == nil) != (level == protocol.ComputerPermissionNone) {
+				t.Fatalf("release computer permission %s with full_access=%v: %v", level, full, err)
 			}
 			encoded, err := json.Marshal(deployment)
 			if err != nil {

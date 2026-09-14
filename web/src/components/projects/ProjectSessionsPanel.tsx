@@ -62,7 +62,6 @@ function permissionText(value: DeploymentPermissions): string {
   if (value.full_access) return 'Full Access（Node）';
   return [
     `files:${value.files}`,
-    `computer:${value.computer}`,
     value.shell ? 'shell' : '',
     value.browser ? 'browser' : '',
     value.dynamic_mcp ? 'dynamic_mcp' : '',

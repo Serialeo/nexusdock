@@ -5,11 +5,15 @@ import (
 	protocol "github.com/Serialeo/agentdock-protocol"
 )
 
-// All Nodes receive the current snapshot unchanged. This checks only whether a
-// requested desktop capability is actually implemented, not a client version.
+// Computer use 尚未完成，当前发行版关闭工具发布和权限启用。
+const computerUseEnabled = false
+
 func validateComputerDeploymentCapability(deployment protocol.Deployment, capabilities []string) error {
 	if deployment.Permissions.Computer == protocol.ComputerPermissionNone {
 		return nil
+	}
+	if !computerUseEnabled {
+		return fmt.Errorf("%s: computer use is disabled in this release", protocol.ErrorComputerUnsupported)
 	}
 	if containsString(capabilities, protocol.ComputerCapability) {
 		return nil

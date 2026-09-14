@@ -161,15 +161,16 @@ func (s *Server) setMCPAppsEnabled(enabled bool) {
 	s.syncMCPAppResources()
 }
 
-func retiredAgentDockToolName(name string) bool {
-	return strings.TrimSpace(name) == "file_publish"
+func unavailableAgentDockToolName(name string) bool {
+	name = strings.TrimSpace(name)
+	return name == "file_publish" || (!computerUseEnabled && protocol.IsComputerTool(name))
 }
 
 func (s *Server) registerNodeTools(node agentdock.Node, hello agentdock.Hello) {
 	defer s.syncMCPAppResources()
 	helloToolNames := make(map[string]struct{}, len(hello.Tools))
 	for _, descriptor := range hello.Tools {
-		if mcpcontract.IsCanonicalTool(descriptor.Name) || retiredAgentDockToolName(descriptor.Name) || strings.TrimSpace(descriptor.Name) == "" {
+		if mcpcontract.IsCanonicalTool(descriptor.Name) || unavailableAgentDockToolName(descriptor.Name) || strings.TrimSpace(descriptor.Name) == "" {
 			continue
 		}
 		helloToolNames[descriptor.Name] = struct{}{}
@@ -287,8 +288,8 @@ func (s *Server) callNodeTool(ctx context.Context, name string, arguments map[st
 			return s.gatewayToolResult(name, map[string]any{"code": "TOOL_NOT_AVAILABLE"}, errors.New("tool visibility is unavailable with current MCP Apps settings"))
 		}
 	}
-	if retiredAgentDockToolName(name) {
-		return s.gatewayToolResult(name, map[string]any{"code": "UNKNOWN_TOOL"}, errors.New("tool has been retired"))
+	if unavailableAgentDockToolName(name) {
+		return s.gatewayToolResult(name, map[string]any{"code": "UNKNOWN_TOOL"}, errors.New("tool is unavailable in this release"))
 	}
 	binding, ok := mcpClientBindingFromContext(ctx)
 	if !ok {

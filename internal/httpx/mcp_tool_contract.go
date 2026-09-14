@@ -320,7 +320,7 @@ func (s *Server) reconcileFleetNodeTool(name string) error {
 	if name == "" || isNexusCentralTool(name) {
 		return nil
 	}
-	if retiredAgentDockToolName(name) {
+	if unavailableAgentDockToolName(name) {
 		ctx := context.Background()
 		if s.agentDock != nil {
 			if err := s.agentDock.DeletePublishedToolContract(ctx, name); err != nil {

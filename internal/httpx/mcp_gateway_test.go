@@ -147,47 +147,51 @@ func TestRecallUpdateFactPreviewsAndWrites(t *testing.T) {
 	}
 }
 
-func TestRetiredFilePublishIsNeverPublishedOrRouted(t *testing.T) {
-	store := newHTTPTestAgentDockStore(t)
-	descriptor := agentdock.ToolDescriptor{
-		Name:        "file_publish",
-		InputSchema: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}},
-	}
-	node := pairHTTPTestNode(t, store, "device_retired_file_publish", "LegacyDock", "0.8.2", descriptor)
-	server := &Server{
-		agentDock: store,
-		mcpServer: mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test", Version: "1"}, nil),
-		mcpTools:  make(map[string]publishedNodeTool),
-	}
-	if err := store.SavePublishedToolContract(t.Context(), agentdock.PublishedToolContract{ToolName: descriptor.Name, Descriptor: descriptor}); err != nil {
-		t.Fatal(err)
-	}
-	server.mcpTools[descriptor.Name] = publishedNodeTool{Descriptor: descriptor}
-	server.mcpServer.AddTool(nodeMCPTool(descriptor), server.nodeToolHandler(descriptor.Name))
+func TestUnavailableNodeToolsAreNeverPublishedOrRouted(t *testing.T) {
+	for _, name := range append([]string{"file_publish"}, mcpcontract.ComputerToolNames()...) {
+		t.Run(name, func(t *testing.T) {
+			store := newHTTPTestAgentDockStore(t)
+			descriptor := agentdock.ToolDescriptor{
+				Name:        name,
+				InputSchema: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}},
+			}
+			node := pairHTTPTestNode(t, store, "device_retired_file_publish", "LegacyDock", "0.8.2", descriptor)
+			server := &Server{
+				agentDock: store,
+				mcpServer: mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test", Version: "1"}, nil),
+				mcpTools:  make(map[string]publishedNodeTool),
+			}
+			if err := store.SavePublishedToolContract(t.Context(), agentdock.PublishedToolContract{ToolName: descriptor.Name, Descriptor: descriptor}); err != nil {
+				t.Fatal(err)
+			}
+			server.mcpTools[descriptor.Name] = publishedNodeTool{Descriptor: descriptor}
+			server.mcpServer.AddTool(nodeMCPTool(descriptor), server.nodeToolHandler(descriptor.Name))
 
-	server.registerNodeTools(node, agentdock.Hello{Tools: []agentdock.ToolDescriptor{descriptor}})
-	if _, ok := server.publishedNodeTool(descriptor.Name); ok {
-		t.Fatal("retired file_publish was published from Node Hello")
-	}
-	contracts, err := store.ListPublishedToolContracts(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, contract := range contracts {
-		if contract.ToolName == descriptor.Name {
-			t.Fatalf("retired file_publish persisted in fleet catalog: %#v", contracts)
-		}
-	}
-	result, err := server.callNodeTool(t.Context(), descriptor.Name, map[string]any{"path": "README.md"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.IsError {
-		t.Fatalf("retired file_publish direct routing unexpectedly succeeded: %#v", result)
-	}
-	details := result.StructuredContent.(map[string]any)
-	if details["code"] != "UNKNOWN_TOOL" {
-		t.Fatalf("retired file_publish routing error = %#v", details)
+			server.registerNodeTools(node, agentdock.Hello{Tools: []agentdock.ToolDescriptor{descriptor}})
+			if _, ok := server.publishedNodeTool(descriptor.Name); ok {
+				t.Fatal("unavailable tool was published from Node Hello")
+			}
+			contracts, err := store.ListPublishedToolContracts(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, contract := range contracts {
+				if contract.ToolName == descriptor.Name {
+					t.Fatalf("unavailable tool persisted in fleet catalog: %#v", contracts)
+				}
+			}
+			result, err := server.callNodeTool(t.Context(), descriptor.Name, map[string]any{"path": "README.md"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.IsError {
+				t.Fatalf("unavailable tool direct routing unexpectedly succeeded: %#v", result)
+			}
+			details := result.StructuredContent.(map[string]any)
+			if details["code"] != "UNKNOWN_TOOL" {
+				t.Fatalf("unavailable tool routing error = %#v", details)
+			}
+		})
 	}
 }
 

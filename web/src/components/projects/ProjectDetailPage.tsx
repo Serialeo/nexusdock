@@ -3,7 +3,7 @@ import { ArrowLeft, CircleAlert, CirclePlus, CloudCog, FolderOpen, FolderTree, P
 import { ApiError, api } from '../../api/client';
 import Dialog from '../Dialog';
 import type { AgentDockNode } from '../runtime/AgentDockNodes';
-import type { ComputerPermission, DeploymentPermissions, FileCapability, ProjectDeployment, ProjectRecord } from './ProjectsPage';
+import type { DeploymentPermissions, FileCapability, ProjectDeployment, ProjectRecord } from './ProjectsPage';
 import RemoteFolderPicker from './RemoteFolderPicker';
 import ProjectPromptPanel from './ProjectPromptPanel';
 import ProjectSessionsPanel from './ProjectSessionsPanel';
@@ -19,7 +19,6 @@ type DeploymentDraft = {
   role: string;
   purpose: string;
   files: FileCapability;
-  computer: ComputerPermission;
   shell: boolean;
   browser: boolean;
   dynamicMCP: boolean;
@@ -29,7 +28,7 @@ type DeploymentDraft = {
 
 const emptyDeploymentDraft: DeploymentDraft = {
   nodeID: '', workingFolder: '', role: '', purpose: '', files: 'read_only',
-  computer: 'none', shell: false, browser: false, dynamicMCP: false, acp: false, enabled: true,
+  shell: false, browser: false, dynamicMCP: false, acp: false, enabled: true,
 };
 
 function messageOf(error: unknown): string {
@@ -41,7 +40,7 @@ function messageOf(error: unknown): string {
 }
 
 function permissionsFromDraft(draft: DeploymentDraft): DeploymentPermissions {
-  return { full_access: false, files: draft.files, computer: draft.computer, shell: draft.shell, browser: draft.browser, dynamic_mcp: draft.dynamicMCP, acp: draft.acp };
+  return { full_access: false, files: draft.files, computer: 'none', shell: draft.shell, browser: draft.browser, dynamic_mcp: draft.dynamicMCP, acp: draft.acp };
 }
 
 function draftFromDeployment(value: ProjectDeployment): DeploymentDraft {
@@ -51,7 +50,6 @@ function draftFromDeployment(value: ProjectDeployment): DeploymentDraft {
     role: value.role || '',
     purpose: value.purpose || '',
     files: value.permissions.files,
-    computer: value.permissions.computer,
     shell: value.permissions.shell,
     browser: value.permissions.browser,
     dynamicMCP: value.permissions.dynamic_mcp,
@@ -63,7 +61,6 @@ function draftFromDeployment(value: ProjectDeployment): DeploymentDraft {
 function permissionText(value: ProjectDeployment): string {
   const enabled = [
     `files:${value.permissions.files}`,
-    `computer:${value.permissions.computer}`,
     value.permissions.shell ? 'shell' : '',
     value.permissions.browser ? 'browser' : '',
     value.permissions.dynamic_mcp ? 'dynamic_mcp' : '',
@@ -253,7 +250,7 @@ export default function ProjectDetailPage({ projectID, nodes, onBack }: { projec
         <label><span>Role</span><input value={draft.role} onChange={(event) => setDraft((value) => ({ ...value, role: event.target.value }))} placeholder="primary-development" disabled={!!busy} /></label>
         <label><span>Purpose</span><input value={draft.purpose} onChange={(event) => setDraft((value) => ({ ...value, purpose: event.target.value }))} placeholder="Linux 主开发环境" disabled={!!busy} /></label>
         {selectedNode?.full_access && <div className="nx-alert is-info" role="status"><strong>Full Access 已在 Node 上开启。</strong> 下方细粒度权限作为关闭 Full Access 后的回退配置保留；当前有效权限不受 Project Folder 限制。</div>}
-        <fieldset className="deployment-permission-fieldset"><legend>Deployment 细粒度权限{selectedNode?.full_access ? '（当前被 Full Access 覆盖）' : ''}</legend><label><span>Files</span><select value={draft.files} onChange={(event) => setDraft((value) => ({ ...value, files: event.target.value as FileCapability }))} disabled={!!busy}><option value="none">禁用</option><option value="read_only">只读</option><option value="read_write">读写（含删除/移动）</option></select></label><label><span>Computer</span><select value={draft.computer} onChange={(event) => setDraft((value) => ({ ...value, computer: event.target.value as ComputerPermission }))} disabled={!!busy}><option value="none">禁用</option><option value="observe">只观察</option><option value="control">可控制</option></select></label><div className="deployment-toggle-grid"><label><input type="checkbox" checked={draft.shell} onChange={(event) => setDraft((value) => ({ ...value, shell: event.target.checked }))} disabled={!!busy} /><span>Shell / Git via shell</span></label><label><input type="checkbox" checked={draft.browser} onChange={(event) => setDraft((value) => ({ ...value, browser: event.target.checked }))} disabled={!!busy} /><span>Browser</span></label><label><input type="checkbox" checked={draft.dynamicMCP} onChange={(event) => setDraft((value) => ({ ...value, dynamicMCP: event.target.checked }))} disabled={!!busy} /><span>Dynamic MCP</span></label><label><input type="checkbox" checked={draft.acp} onChange={(event) => setDraft((value) => ({ ...value, acp: event.target.checked }))} disabled={!!busy} /><span>ACP</span></label></div></fieldset>
+        <fieldset className="deployment-permission-fieldset"><legend>Deployment 细粒度权限{selectedNode?.full_access ? '（当前被 Full Access 覆盖）' : ''}</legend><label><span>Files</span><select value={draft.files} onChange={(event) => setDraft((value) => ({ ...value, files: event.target.value as FileCapability }))} disabled={!!busy}><option value="none">禁用</option><option value="read_only">只读</option><option value="read_write">读写（含删除/移动）</option></select></label><div className="deployment-toggle-grid"><label><input type="checkbox" checked={draft.shell} onChange={(event) => setDraft((value) => ({ ...value, shell: event.target.checked }))} disabled={!!busy} /><span>Shell / Git via shell</span></label><label><input type="checkbox" checked={draft.browser} onChange={(event) => setDraft((value) => ({ ...value, browser: event.target.checked }))} disabled={!!busy} /><span>Browser</span></label><label><input type="checkbox" checked={draft.dynamicMCP} onChange={(event) => setDraft((value) => ({ ...value, dynamicMCP: event.target.checked }))} disabled={!!busy} /><span>Dynamic MCP</span></label><label><input type="checkbox" checked={draft.acp} onChange={(event) => setDraft((value) => ({ ...value, acp: event.target.checked }))} disabled={!!busy} /><span>ACP</span></label></div></fieldset>
         {!selectedNode?.full_access && projectShellPermissionWarning(draft.files, draft.shell) && <div className="nx-alert is-warning" role="status"><CircleAlert size={16} />{projectShellPermissionWarning(draft.files, draft.shell)}</div>}
         <label className="deployment-enabled"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((value) => ({ ...value, enabled: event.target.checked }))} disabled={!!busy} /><span>启用 Deployment</span></label>
         <footer><button type="button" className="nx-button is-secondary" disabled={!!busy} onClick={() => { setCreating(false); setEditing(null); }}>取消</button><button type="submit" className="nx-button" disabled={!!busy || !draft.nodeID}>{busy ? '保存中…' : editing ? '保存 desired 配置' : '创建并应用'}</button></footer>
