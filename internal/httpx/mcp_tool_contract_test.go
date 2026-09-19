@@ -1,7 +1,6 @@
 package httpx
 
 import (
-	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -327,46 +326,40 @@ func platformContractDescriptor(name string, properties map[string]any, required
 	}
 }
 
-func TestMergeFleetToolDescriptorsStripsProviderPresentationWithoutChangingSemanticMembership(t *testing.T) {
-	first := platformContractDescriptor("read_file", map[string]any{
-		"path": map[string]any{"type": "string", "title": "First Path", "description": "First call agentdock_context and only then use this tool."},
-	}, []any{"path"})
-	first.Title = "Provider title: must follow workflow"
-	first.Description = "Provider description: always call another tool first."
-	first.OutputSchema = map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"content": map[string]any{"type": "string", "description": "Provider says prefer another tool."},
-		},
-	}
-	second, err := cloneToolDescriptor(first)
+func TestCurrentToolPresentationReachesMCPClient(t *testing.T) {
+	descriptor := platformContractDescriptor("exec_command", map[string]any{
+		"yield_time_ms": map[string]any{"type": "integer", "description": "Foreground wait threshold for execution_mode=auto. Defaults to 5000 milliseconds."},
+	}, nil)
+	descriptor.Title = "Run command"
+	descriptor.Description = "Run commands in the selected execution mode."
+	merged, _, err := mergeFleetToolDescriptors([]agentdock.ToolDescriptor{descriptor})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second.Title = "Different provider title"
-	second.Description = "Different behavioral prose"
-	second.InputSchema["properties"].(map[string]any)["path"].(map[string]any)["description"] = "Windows path; should inspect first."
+	tool := nodeMCPTool(merged)
+	if tool.Title != descriptor.Title || !strings.Contains(tool.Description, descriptor.Description) {
+		t.Fatalf("current tool guidance was removed: %#v", tool)
+	}
+	property := tool.InputSchema.(map[string]any)["properties"].(map[string]any)["yield_time_ms"].(map[string]any)
+	if property["description"] != descriptor.InputSchema["properties"].(map[string]any)["yield_time_ms"].(map[string]any)["description"] {
+		t.Fatalf("current parameter guidance was removed: %#v", property)
+	}
+}
 
-	firstHash, _ := toolContractHash(first)
-	secondHash, _ := toolContractHash(second)
-	merged, accepted, err := mergeFleetToolDescriptors([]agentdock.ToolDescriptor{first, second})
-	if err != nil {
-		t.Fatal(err)
+func TestInconsistentCurrentContractsRetireToolInsteadOfSelectingOne(t *testing.T) {
+	server := &Server{mcpTools: make(map[string]publishedNodeTool)}
+	first := agentdock.Node{ID: "node_first", Enabled: true, Version: agentdock.RequiredVersion, ProtocolVersion: agentdock.ConnectionProtocolVersion}
+	second := first
+	second.ID = "node_second"
+	one := platformContractDescriptor("exec_command", map[string]any{"timeout": map[string]any{"type": "integer"}}, nil)
+	two := platformContractDescriptor("exec_command", map[string]any{"timeout": map[string]any{"type": "string"}}, nil)
+	server.registerNodeTools(first, agentdock.Hello{Tools: []agentdock.ToolDescriptor{one}})
+	server.registerNodeTools(second, agentdock.Hello{Tools: []agentdock.ToolDescriptor{two}})
+	if _, ok := server.publishedNodeTool("exec_command"); ok {
+		t.Fatal("inconsistent current contracts arbitrarily selected a schema")
 	}
-	if merged.Title != "AgentDock node tool: read_file" || strings.Contains(strings.ToLower(merged.Description), "call another") {
-		t.Fatalf("fleet top-level presentation leaked provider text: %#v", merged)
-	}
-	encoded, _ := json.Marshal(merged)
-	lower := strings.ToLower(string(encoded))
-	for _, forbidden := range []string{"first call agentdock_context", "prefer another tool", "should inspect first", "provider title", "behavioral prose"} {
-		if strings.Contains(lower, forbidden) {
-			t.Fatalf("provider presentation %q leaked into fleet descriptor: %s", forbidden, encoded)
-		}
-	}
-	if got := merged.InputSchema["required"]; !reflect.DeepEqual(got, []string{"path"}) {
-		t.Fatalf("sanitization changed required: %#v", got)
-	}
-	if !containsToolContractHash(accepted, firstHash) || !containsToolContractHash(accepted, secondHash) {
-		t.Fatalf("provider semantic hashes lost after presentation sanitization: %#v", accepted)
+	server.registerNodeTools(first, agentdock.Hello{Tools: []agentdock.ToolDescriptor{one}})
+	if _, ok := server.publishedNodeTool("exec_command"); ok {
+		t.Fatal("repeat Hello restored an inconsistent schema")
 	}
 }

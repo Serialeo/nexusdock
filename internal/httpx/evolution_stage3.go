@@ -189,7 +189,7 @@ func (s *Server) stage3Snapshot(ctx context.Context) (stage3.Snapshot, []agentdo
 	}
 	enabled := make([]agentdock.Node, 0, len(nodes))
 	for _, node := range nodes {
-		if node.Enabled && nodeUsesCurrentBridgeProtocol(node) {
+		if node.Enabled && node.IsCurrent() {
 			enabled = append(enabled, node)
 		}
 	}

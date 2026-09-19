@@ -52,7 +52,7 @@ func (s *Server) callProjectList(ctx context.Context) (map[string]any, error) {
 		if !project.Enabled {
 			continue
 		}
-		deployments, listErr := s.projects.ListDeployments(ctx, project.ID)
+		deployments, listErr := s.currentProjectDeployments(ctx, project.ID)
 		if listErr != nil {
 			return projectToolError("PROJECT_LIST_FAILED", "failed to list Project Deployments", map[string]any{"project_id": project.ID, "reason": listErr.Error()})
 		}
@@ -98,7 +98,7 @@ func (s *Server) callProjectOpen(ctx context.Context, args map[string]any) (map[
 	if !project.Enabled {
 		return projectToolError(protocol.ErrorProjectNotFound, "Project is disabled and cannot be entered", map[string]any{"project_id": project.ID})
 	}
-	deployments, err := s.projects.ListDeployments(ctx, project.ID)
+	deployments, err := s.currentProjectDeployments(ctx, project.ID)
 	if err != nil {
 		return projectToolError("PROJECT_OPERATION_FAILED", "failed to list Project Deployments", map[string]any{"reason": err.Error()})
 	}
@@ -164,9 +164,9 @@ func (s *Server) callNodeOpen(ctx context.Context, args map[string]any) (map[str
 	if request.NodeID == "" || request.ClientRequestID == "" {
 		return projectToolError("INVALID_NODE_SESSION", "node_id and client_request_id are required", nil)
 	}
-	node, err := s.agentDock.Get(ctx, request.NodeID)
+	node, err := s.currentAgentDockNode(ctx, request.NodeID)
 	if err != nil || !node.Enabled {
-		return projectToolError("AGENTDOCK_NODE_NOT_FOUND", "AgentDock Node is unavailable", map[string]any{"node_id": request.NodeID})
+		return projectToolError("AGENTDOCK_NODE_NOT_FOUND", "AgentDock Node is unavailable", nil)
 	}
 	configured, err := s.projects.GetNodeSession(ctx, request.NodeID)
 	if errors.Is(err, projectstore.ErrNodeSessionNotFound) || (err == nil && !configured.Deployment.Enabled) {
@@ -251,9 +251,9 @@ func (s *Server) nodeOpenResult(ctx context.Context, ownerKey, workSessionID str
 	if err := validateProjectPromptContextBudget(targets); err != nil {
 		return projectToolError(protocol.ErrorProjectPromptTooLarge, "Node WorkSession Prompt exceeds the context budget", map[string]any{"reason": err.Error()})
 	}
-	node, err := s.agentDock.Get(ctx, project.NodeID)
+	node, err := s.currentAgentDockNode(ctx, project.NodeID)
 	if err != nil {
-		return projectToolError("AGENTDOCK_NODE_NOT_FOUND", "AgentDock Node is unavailable", map[string]any{"node_id": project.NodeID})
+		return projectToolError("AGENTDOCK_NODE_NOT_FOUND", "AgentDock Node is unavailable", nil)
 	}
 	delivery, err := s.projectContextDeliveryView(ctx, ownerKey, session.ID, "", session.ContextRevision)
 	if err != nil {
@@ -298,6 +298,9 @@ func (s *Server) callProjectContext(ctx context.Context, args map[string]any) (m
 	if err != nil {
 		return projectToolSessionError(err)
 	}
+	if _, err := s.currentAgentDockNode(ctx, stored.Target.NodeID); err != nil {
+		return projectToolError(protocol.ErrorSessionTargetDenied, "Target is unavailable", nil)
+	}
 	if stored.Target.Status == protocol.TargetRevoked {
 		return projectToolError(protocol.ErrorSessionTargetDenied, "Project Target has been revoked", map[string]any{"target_id": targetID})
 	}
@@ -318,9 +321,9 @@ func (s *Server) callProjectContext(ctx context.Context, args map[string]any) (m
 	if !s.agentDockHub.Online(deployment.NodeID) {
 		return projectToolError(protocol.ErrorDeploymentNotReady, "Target AgentDock is offline", map[string]any{"target_id": targetID, "node_id": deployment.NodeID})
 	}
-	node, err := s.agentDock.Get(ctx, deployment.NodeID)
-	if err != nil || !nodeUsesCurrentBridgeProtocol(node) {
-		return projectToolError(protocol.ErrorDeploymentNotReady, "Target AgentDock has not completed the current Bridge v4 handshake", map[string]any{"target_id": targetID, "node_id": deployment.NodeID})
+	node, err := s.currentAgentDockNode(ctx, deployment.NodeID)
+	if err != nil {
+		return projectToolError(protocol.ErrorSessionTargetDenied, "Target is unavailable", nil)
 	}
 	effectivePermissions := effectiveProjectPermissions(deployment.Permissions, node.FullAccess)
 	cwdRel := strings.TrimSpace(request.CWDRel)
@@ -372,9 +375,9 @@ func (s *Server) callProjectContext(ctx context.Context, args map[string]any) (m
 		"delivery":        delivery,
 	}
 	if project.Kind == projectstore.ProjectKindNode {
-		node, nodeErr := s.agentDock.Get(ctx, project.NodeID)
+		node, nodeErr := s.currentAgentDockNode(ctx, project.NodeID)
 		if nodeErr != nil {
-			return projectToolError("AGENTDOCK_NODE_NOT_FOUND", "AgentDock Node is unavailable", map[string]any{"node_id": project.NodeID})
+			return projectToolError("AGENTDOCK_NODE_NOT_FOUND", "AgentDock Node is unavailable", nil)
 		}
 		result["node"] = map[string]any{"node_id": node.ID, "name": node.Name, "online": s.agentDockHub.Online(node.ID)}
 	} else {
@@ -485,11 +488,11 @@ func (s *Server) projectOpenResult(ctx context.Context, ownerKey, workSessionID 
 	if err != nil {
 		return nil, err
 	}
-	deployments, err := s.projects.ListDeployments(ctx, project.ID)
+	deployments, err := s.currentProjectDeployments(ctx, project.ID)
 	if err != nil {
 		return nil, err
 	}
-	targets, err := s.projects.ListWorkTargets(ctx, ownerKey, session.ID)
+	targets, err := s.currentWorkTargets(ctx, ownerKey, session.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -525,9 +528,13 @@ func (s *Server) projectOpenResult(ctx context.Context, ownerKey, workSessionID 
 	if err != nil {
 		return projectToolError("PROJECT_OPERATION_FAILED", "failed to read Project Context delivery state", map[string]any{"reason": err.Error()})
 	}
+	status := session.Status
+	if status == protocol.WorkSessionReady || status == protocol.WorkSessionPartial || status == protocol.WorkSessionFailed {
+		status = workSessionStatusForTargets(targets)
+	}
 	result := map[string]any{
 		"work_session_id":  session.ID,
-		"status":           string(session.Status),
+		"status":           string(status),
 		"context_revision": session.ContextRevision,
 		"delivery":         delivery,
 		"project":          projectProtocolView(project),
@@ -550,12 +557,9 @@ func (s *Server) projectDeploymentAvailability(ctx context.Context, deployment p
 	if s.agentDockHub == nil || !s.agentDockHub.Online(deployment.NodeID) {
 		return "offline", "AgentDock node is offline"
 	}
-	node, err := s.agentDock.Get(ctx, deployment.NodeID)
+	node, err := s.currentAgentDockNode(ctx, deployment.NodeID)
 	if err != nil {
-		return "node_unavailable", err.Error()
-	}
-	if !nodeUsesCurrentBridgeProtocol(node) {
-		return "protocol_mismatch", "AgentDock node has not completed the current Bridge v4 handshake"
+		return "node_unavailable", "AgentDock node is unavailable"
 	}
 	if !deploymentHasUsableCapability(effectiveProjectPermissions(deployment.Permissions, node.FullAccess), node.Capabilities) {
 		return "capability_denied", "Deployment has no usable allowed capability on this node"

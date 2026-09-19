@@ -379,7 +379,7 @@ func (s *Server) tryApplyProjectDeployment(ctx context.Context, deployment proje
 		}
 		return deployment
 	}
-	if strings.TrimSpace(node.ProtocolVersion) != "" && !nodeUsesCurrentBridgeProtocol(node) {
+	if strings.TrimSpace(node.ProtocolVersion) != "" && !node.IsCurrent() {
 		err := fmt.Errorf("AgentDock node protocol %q is not Bridge v%s", node.ProtocolVersion, agentdock.ConnectionProtocolVersion)
 		updated, recordErr := s.projects.RecordApplyResult(ctx, deployment.ProjectID, deployment.ID, deployment.DesiredRevision, err)
 		if recordErr == nil {
@@ -394,7 +394,7 @@ func (s *Server) tryApplyProjectDeployment(ctx context.Context, deployment proje
 		}
 		return deployment
 	}
-	if !nodeUsesCurrentBridgeProtocol(node) {
+	if !node.IsCurrent() {
 		updated, recordErr := s.projects.RecordApplyResult(ctx, deployment.ProjectID, deployment.ID, deployment.DesiredRevision, errors.New("AgentDock node did not negotiate Bridge v4"))
 		if recordErr == nil {
 			return updated
@@ -443,7 +443,7 @@ func (s *Server) tryRemoveProjectDeployment(ctx context.Context, deployment proj
 		_ = s.projects.RecordRemovalResult(ctx, deployment.ID, err)
 		return
 	}
-	if strings.TrimSpace(node.ProtocolVersion) != "" && !nodeUsesCurrentBridgeProtocol(node) {
+	if strings.TrimSpace(node.ProtocolVersion) != "" && !node.IsCurrent() {
 		_ = s.projects.RecordRemovalResult(ctx, deployment.ID, fmt.Errorf("AgentDock node protocol %q is not Bridge v%s", node.ProtocolVersion, agentdock.ConnectionProtocolVersion))
 		return
 	}
@@ -451,7 +451,7 @@ func (s *Server) tryRemoveProjectDeployment(ctx context.Context, deployment proj
 		_ = s.projects.RecordRemovalResult(ctx, deployment.ID, agentdock.ErrNodeOffline)
 		return
 	}
-	if !nodeUsesCurrentBridgeProtocol(node) {
+	if !node.IsCurrent() {
 		_ = s.projects.RecordRemovalResult(ctx, deployment.ID, errors.New("AgentDock node did not negotiate Bridge v4"))
 		return
 	}
@@ -472,7 +472,7 @@ func (s *Server) revokeProjectTargetsOnNodes(ctx context.Context, targets []proj
 	}
 	for _, target := range targets {
 		node, err := s.agentDock.Get(ctx, target.Target.NodeID)
-		if err != nil || !node.Enabled || !nodeUsesCurrentBridgeProtocol(node) || !s.agentDockHub.Online(node.ID) {
+		if err != nil || !node.Enabled || !node.IsCurrent() || !s.agentDockHub.Online(node.ID) {
 			continue
 		}
 		invokeCtx, cancel := context.WithTimeout(ctx, projectNodeApplyTimeout)
@@ -543,7 +543,7 @@ func validateProjectDeploymentRemoveResult(result map[string]any, expectedDeploy
 
 func (s *Server) handleAgentDockHello(node agentdock.Node, hello agentdock.Hello) {
 	s.registerNodeTools(node, hello)
-	if s.projects == nil || !nodeUsesCurrentBridgeProtocol(node) {
+	if s.projects == nil || !node.IsCurrent() {
 		return
 	}
 	go s.reconcileProjectNode(node.ID)

@@ -51,7 +51,7 @@ func TestCallNodeToolKeepsSuccessWhenArtifactDecorationFails(t *testing.T) {
 	if err := socket.WriteJSON(protocol.Message{
 		Type: protocol.MessageNodeHello, ProtocolVersion: agentdock.ConnectionProtocolVersion,
 		Hello: &protocol.Hello{
-			DeviceID: node.DeviceID, ProtocolVersion: agentdock.ConnectionProtocolVersion,
+			DeviceID: node.DeviceID, Version: agentdock.RequiredVersion, ProtocolVersion: agentdock.ConnectionProtocolVersion,
 			Capabilities:       []string{descriptor.Name},
 			BridgeCapabilities: []string{protocol.ArtifactReadCapability},
 			Tools:              []protocol.ToolDescriptor{descriptor},
@@ -114,7 +114,7 @@ func TestCallNodeToolKeepsSuccessWhenArtifactDecorationFails(t *testing.T) {
 		mcpResources: make(map[string]struct{}),
 		logger:       slog.Default(),
 	}
-	server.registerNodeTools(node, agentdock.Hello{Tools: []agentdock.ToolDescriptor{descriptor}})
+	server.registerNodeTools(node, agentdock.Hello{Version: agentdock.RequiredVersion, Tools: []agentdock.ToolDescriptor{descriptor}})
 	ctx, route := bindNodeRoutingTargetForTest(t, projects, node)
 	result, err := server.callNodeTool(ctx, descriptor.Name, route)
 	if err != nil {

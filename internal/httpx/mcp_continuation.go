@@ -58,6 +58,9 @@ func (s *Server) callWorkContinuation(ctx context.Context, name string, args map
 	if !s.mcpAppsEnabled() && (continuationAppOnly(name) || name == "present_work_continuation") {
 		return projectToolError("MCP_APPS_ENABLED_REQUIRED", "MCP Apps are disabled", nil)
 	}
+	if err := s.requireCurrentContinuationTargets(ctx, binding.OwnerKey, strings.TrimSpace(stringArgument(args, "work_session_id"))); err != nil {
+		return projectToolError("WORK_CONTINUATION_DENIED", "WorkSession is unavailable", nil)
+	}
 	var result protocol.WorkContinuationResult
 	var err error
 	switch name {

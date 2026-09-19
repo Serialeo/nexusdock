@@ -124,7 +124,7 @@ func (s *Server) callFleetAgentDockContextWithTimeout(ctx context.Context, leafT
 	}
 	enabled := make([]agentdock.Node, 0, len(nodes))
 	for _, node := range nodes {
-		if node.Enabled && nodeUsesCurrentBridgeProtocol(node) {
+		if node.Enabled && node.IsCurrent() {
 			enabled = append(enabled, node)
 		}
 	}

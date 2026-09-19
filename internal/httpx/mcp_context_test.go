@@ -80,17 +80,17 @@ func TestFleetSharedContextComesDirectlyFromNexus(t *testing.T) {
 func TestCallFleetAgentDockContextAggregatesOnlineAndOfflineNodes(t *testing.T) {
 	store := newHTTPTestAgentDockStore(t)
 	descriptor := fleetContextTestDescriptor()
-	online := pairHTTPTestNode(t, store, "device_context_online", "DockMini", "2.0.0", descriptor)
+	online := pairHTTPTestNode(t, store, "device_context_online", "DockMini", agentdock.RequiredVersion, descriptor)
 	var err error
 	online, err = store.UpdateHello(t.Context(), online.ID, agentdock.Hello{
-		DeviceID: online.DeviceID, Version: online.Version, ProtocolVersion: agentdock.ConnectionProtocolVersion,
+		DeviceID: online.DeviceID, Version: agentdock.RequiredVersion, ProtocolVersion: agentdock.ConnectionProtocolVersion,
 		OS: "darwin", Arch: "arm64", Capabilities: []string{descriptor.Name}, Tools: []agentdock.ToolDescriptor{descriptor}, UIResources: []agentdock.UIResourceCapability{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	offline := pairHTTPTestNode(t, store, "device_context_offline", "DockWin", "2.0.0", descriptor)
-	disabled := pairHTTPTestNode(t, store, "device_context_disabled", "DockAir", "2.0.0", descriptor)
+	offline := pairHTTPTestNode(t, store, "device_context_offline", "DockWin", agentdock.RequiredVersion, descriptor)
+	disabled := pairHTTPTestNode(t, store, "device_context_disabled", "DockAir", agentdock.RequiredVersion, descriptor)
 	enabled := false
 	if _, err := store.Update(t.Context(), disabled.ID, agentdock.UpdateInput{Enabled: &enabled}); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestCallFleetAgentDockContextAggregatesOnlineAndOfflineNodes(t *testing.T) 
 	if fleet.Nodes[0].Context.CommonSkills == nil || fleet.Nodes[0].Context.CommonSkills.Total != 1 || fleet.Nodes[0].Context.CommonSkills.Effective != 1 || len(fleet.Nodes[0].Context.CommonSkills.Items) != 1 || fleet.Nodes[0].Context.CommonSkills.Items[0].Name != "personal-dev-guard" {
 		t.Fatalf("common Skill context was not forwarded: %#v", fleet.Nodes[0].Context.CommonSkills)
 	}
-	if fleet.Nodes[0].Version != "2.0.0" || fleet.Nodes[0].OS != "darwin" || fleet.Nodes[0].Arch != "arm64" {
+	if fleet.Nodes[0].Version != agentdock.RequiredVersion || fleet.Nodes[0].OS != "darwin" || fleet.Nodes[0].Arch != "arm64" {
 		t.Fatalf("fleet node facts must come from Bridge Hello, got %#v", fleet.Nodes[0])
 	}
 	if fleet.Nodes[1].Name != offline.Name || fleet.Nodes[1].Online || containsString(fleet.Nodes[1].Capabilities, descriptor.Name) || fleet.Nodes[1].Error != agentdock.ErrNodeOffline.Error() || fleet.Nodes[1].CapabilityStatus != "offline" || fleet.Nodes[1].Context != nil {
@@ -152,8 +152,8 @@ func TestCallFleetAgentDockContextAggregatesOnlineAndOfflineNodes(t *testing.T) 
 func TestFleetContextKeepsNodeRuntimeFactsSeparateAndDropsProviderRules(t *testing.T) {
 	store := newHTTPTestAgentDockStore(t)
 	descriptor := fleetContextTestDescriptor()
-	shark := pairHTTPTestNode(t, store, "device_context_shark", "Shark", "2.0.0", descriptor)
-	mba := pairHTTPTestNode(t, store, "device_context_mba", "MBA", "2.0.0", descriptor)
+	shark := pairHTTPTestNode(t, store, "device_context_shark", "Shark", agentdock.RequiredVersion, descriptor)
+	mba := pairHTTPTestNode(t, store, "device_context_mba", "MBA", agentdock.RequiredVersion, descriptor)
 
 	hub := agentdock.NewHub(store)
 	connectFleetContextTestNode(t, hub, shark, descriptor, map[string]any{
@@ -204,7 +204,7 @@ func TestFleetContextKeepsNodeRuntimeFactsSeparateAndDropsProviderRules(t *testi
 func TestFleetContextKeepsNexusSharedContextWhenAllNodesAreOffline(t *testing.T) {
 	nodeStore := newHTTPTestAgentDockStore(t)
 	descriptor := fleetContextTestDescriptor()
-	offlineNode := pairHTTPTestNode(t, nodeStore, "device_context_offline_only", "DockWin", "2.0.0", descriptor)
+	offlineNode := pairHTTPTestNode(t, nodeStore, "device_context_offline_only", "DockWin", agentdock.RequiredVersion, descriptor)
 
 	recallStore, err := recall.NewStore(t.TempDir())
 	if err != nil {
@@ -371,7 +371,7 @@ func connectFleetContextTestNode(t *testing.T, hub *agentdock.Hub, node agentdoc
 func TestFleetContextReturnsPartialResultWhenNodeContextTimesOut(t *testing.T) {
 	store := newHTTPTestAgentDockStore(t)
 	descriptor := fleetContextTestDescriptor()
-	node := pairHTTPTestNode(t, store, "device_context_timeout", "DockSlow", "2.0.0", descriptor)
+	node := pairHTTPTestNode(t, store, "device_context_timeout", "DockSlow", agentdock.RequiredVersion, descriptor)
 	hub := agentdock.NewHub(store)
 	connectStalledFleetContextTestNode(t, hub, node, descriptor)
 	recallStore, err := recall.NewStore(t.TempDir())
@@ -450,9 +450,9 @@ func connectStalledFleetContextTestNode(t *testing.T, hub *agentdock.Hub, node a
 func TestFleetContextOmitsPreviousBridgeProtocolGeneration(t *testing.T) {
 	store := newHTTPTestAgentDockStore(t)
 	descriptor := fleetContextTestDescriptor()
-	node := pairHTTPTestNode(t, store, "device_previous_fleet", "PreviousBridge", "1.9.0", descriptor)
+	node := pairHTTPTestNode(t, store, "device_previous_fleet", "PreviousBridge", agentdock.RequiredVersion, descriptor)
 	previous, err := store.UpdateHello(t.Context(), node.ID, agentdock.Hello{
-		DeviceID: node.DeviceID, Version: "1.9.0", ProtocolVersion: "2",
+		DeviceID: node.DeviceID, Version: agentdock.RequiredVersion, ProtocolVersion: "2",
 		Capabilities: []string{descriptor.Name}, Tools: []agentdock.ToolDescriptor{descriptor}, UIResources: []agentdock.UIResourceCapability{},
 	})
 	if err != nil {

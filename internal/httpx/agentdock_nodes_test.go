@@ -154,13 +154,14 @@ func TestDeviceTokenRecallPreviewUsesRealStoreWithoutPersistence(t *testing.T) {
 	}
 }
 
-func TestNodeDisablePromotesConvergedToolContract(t *testing.T) {
+func TestNodeDisableDoesNotChangeCurrentToolContract(t *testing.T) {
 	server := newNodeTestServer(t)
 	server.mcpServer = mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test", Version: "1"}, nil)
 	server.mcpTools = make(map[string]publishedNodeTool)
+	server.agentDockHub.SetDisconnectHandler(server.handleAgentDockDisconnect)
 	oldDescriptor, newDescriptor := nodeLifecycleTestDescriptors()
 	oldNode := pairHTTPTestNode(t, server.agentDock, "device_disable_old", "DockMini", "1.8.3", oldDescriptor)
-	newNode := pairHTTPTestNode(t, server.agentDock, "device_disable_new", "DockAir", "1.9.0", newDescriptor)
+	newNode := pairHTTPTestNode(t, server.agentDock, "device_disable_new", "DockAir", agentdock.RequiredVersion, newDescriptor)
 	server.registerNodeTools(oldNode, agentdock.Hello{Tools: []agentdock.ToolDescriptor{oldDescriptor}})
 	server.registerNodeTools(newNode, agentdock.Hello{Tools: []agentdock.ToolDescriptor{newDescriptor}})
 
@@ -191,7 +192,7 @@ func TestNodeEnableReconcileKeepsCanonicalToolsCentral(t *testing.T) {
 		Name:        mcpcontract.ToolAgentDockContext,
 		InputSchema: input,
 	}
-	node := pairHTTPTestNode(t, server.agentDock, "device_canonical_reconcile", "DockMini", "1.9.0", descriptor)
+	node := pairHTTPTestNode(t, server.agentDock, "device_canonical_reconcile", "DockMini", agentdock.RequiredVersion, descriptor)
 	server.initializeMCPGateway()
 
 	// 即使 enabled 没有变化，管理端 PATCH 仍会触发一次完整工具契约重算。
@@ -239,13 +240,14 @@ func TestNodeEnableReconcileKeepsCanonicalToolsCentral(t *testing.T) {
 	t.Fatal("agentdock_context is missing")
 }
 
-func TestNodeDeletePromotesConvergedToolContract(t *testing.T) {
+func TestNodeDeleteDoesNotChangeCurrentToolContract(t *testing.T) {
 	server := newNodeTestServer(t)
 	server.mcpServer = mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test", Version: "1"}, nil)
 	server.mcpTools = make(map[string]publishedNodeTool)
+	server.agentDockHub.SetDisconnectHandler(server.handleAgentDockDisconnect)
 	oldDescriptor, newDescriptor := nodeLifecycleTestDescriptors()
 	oldNode := pairHTTPTestNode(t, server.agentDock, "device_delete_old", "DockMini", "1.8.3", oldDescriptor)
-	newNode := pairHTTPTestNode(t, server.agentDock, "device_delete_new", "DockAir", "1.9.0", newDescriptor)
+	newNode := pairHTTPTestNode(t, server.agentDock, "device_delete_new", "DockAir", agentdock.RequiredVersion, newDescriptor)
 	server.registerNodeTools(oldNode, agentdock.Hello{Tools: []agentdock.ToolDescriptor{oldDescriptor}})
 	server.registerNodeTools(newNode, agentdock.Hello{Tools: []agentdock.ToolDescriptor{newDescriptor}})
 
@@ -267,11 +269,12 @@ func TestNodeDeleteRetiresLastPublishedTool(t *testing.T) {
 	server := newNodeTestServer(t)
 	server.mcpServer = mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test", Version: "1"}, nil)
 	server.mcpTools = make(map[string]publishedNodeTool)
+	server.agentDockHub.SetDisconnectHandler(server.handleAgentDockDisconnect)
 	descriptor := agentdock.ToolDescriptor{
 		Name:        "browser_act",
 		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 	}
-	node := pairHTTPTestNode(t, server.agentDock, "device_delete_last", "DockMini", "1.9.0", descriptor)
+	node := pairHTTPTestNode(t, server.agentDock, "device_delete_last", "DockMini", agentdock.RequiredVersion, descriptor)
 	server.registerNodeTools(node, agentdock.Hello{Tools: []agentdock.ToolDescriptor{descriptor}})
 
 	request := httptest.NewRequest(http.MethodDelete, "/v1/runtime/nodes/"+node.ID, nil)

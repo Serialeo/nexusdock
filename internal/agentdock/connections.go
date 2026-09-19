@@ -45,12 +45,19 @@ type Hub struct {
 	mu            sync.RWMutex
 	nodes         map[string]*nodeConnection
 	onHello       func(Node, Hello)
+	onDisconnect  func(string)
 	snapshotLocks map[string]*sync.Mutex
 }
 
 func (h *Hub) SetHelloHandler(handler func(Node, Hello)) {
 	h.mu.Lock()
 	h.onHello = handler
+	h.mu.Unlock()
+}
+
+func (h *Hub) SetDisconnectHandler(handler func(string)) {
+	h.mu.Lock()
+	h.onDisconnect = handler
 	h.mu.Unlock()
 }
 
@@ -78,12 +85,26 @@ func (h *Hub) Online(nodeID string) bool {
 }
 
 func (h *Hub) Disconnect(nodeID string) {
+	snapshotLock := h.snapshotLock(nodeID)
+	snapshotLock.Lock()
+	defer snapshotLock.Unlock()
+	h.disconnect(nodeID)
+}
+
+// 调用方持有该节点的 snapshotLock，清理目录与新连接发布不能交错。
+func (h *Hub) disconnect(nodeID string) {
 	h.mu.Lock()
 	connection := h.nodes[nodeID]
 	delete(h.nodes, nodeID)
+	onDisconnect := h.onDisconnect
 	h.mu.Unlock()
 	if connection != nil {
 		connection.close(ErrNodeDisconnected)
+	}
+	// The callback is intentionally idempotent and runs even when the socket was
+	// already gone, so callers never need an unsafe second cleanup by node ID.
+	if onDisconnect != nil {
+		onDisconnect(nodeID)
 	}
 }
 
@@ -116,7 +137,7 @@ func (h *Hub) Accept(w http.ResponseWriter, r *http.Request, nodeID string) erro
 		connection.close(err)
 		return fmt.Errorf("读取 AgentDock 握手: %w", err)
 	}
-	if first.Type != protocol.MessageNodeHello || first.Hello == nil || first.ProtocolVersion != ConnectionProtocolVersion || first.Hello.ProtocolVersion != ConnectionProtocolVersion {
+	if first.Type != protocol.MessageNodeHello || first.Hello == nil {
 		connection.close(errors.New("invalid AgentDock handshake"))
 		return errors.New("AgentDock 节点握手无效")
 	}
@@ -127,6 +148,16 @@ func (h *Hub) Accept(w http.ResponseWriter, r *http.Request, nodeID string) erro
 	}
 	snapshotLock := h.snapshotLock(nodeID)
 	snapshotLock.Lock()
+	if first.ProtocolVersion != ConnectionProtocolVersion || !(Node{Version: first.Hello.Version, ProtocolVersion: first.Hello.ProtocolVersion}).IsCurrent() {
+		err := h.store.recordRejectedHello(r.Context(), nodeID, first.ProtocolVersion, *first.Hello)
+		if err == nil {
+			h.disconnect(nodeID)
+			err = fmt.Errorf("AgentDock 节点版本不匹配：需要 %s / Bridge %s", RequiredVersion, ConnectionProtocolVersion)
+		}
+		snapshotLock.Unlock()
+		connection.close(err)
+		return err
+	}
 	updated, err := h.store.UpdateHello(r.Context(), nodeID, *first.Hello)
 	if err != nil {
 		snapshotLock.Unlock()
@@ -218,12 +249,22 @@ func (h *Hub) invoke(ctx context.Context, nodeID, operation string, executionCon
 
 func (h *Hub) readLoop(connection *nodeConnection) {
 	defer func() {
+		snapshotLock := h.snapshotLock(connection.nodeID)
+		snapshotLock.Lock()
+		defer snapshotLock.Unlock()
+
 		h.mu.Lock()
+		removed := false
 		if h.nodes[connection.nodeID] == connection {
 			delete(h.nodes, connection.nodeID)
+			removed = true
 		}
+		onDisconnect := h.onDisconnect
 		h.mu.Unlock()
 		connection.close(ErrNodeDisconnected)
+		if removed && onDisconnect != nil {
+			onDisconnect(connection.nodeID)
+		}
 	}()
 	for {
 		var message connectionMessage
@@ -233,7 +274,7 @@ func (h *Hub) readLoop(connection *nodeConnection) {
 		_ = connection.socket.SetReadDeadline(time.Now().Add(2 * heartbeatInterval))
 		switch message.Type {
 		case protocol.MessageNodeUpdated:
-			if message.Hello == nil || message.ProtocolVersion != ConnectionProtocolVersion || message.Hello.ProtocolVersion != ConnectionProtocolVersion {
+			if message.Hello == nil {
 				return
 			}
 			snapshotLock := h.snapshotLock(connection.nodeID)
@@ -243,6 +284,14 @@ func (h *Hub) readLoop(connection *nodeConnection) {
 			onHello := h.onHello
 			h.mu.RUnlock()
 			if !current {
+				snapshotLock.Unlock()
+				return
+			}
+			if message.ProtocolVersion != ConnectionProtocolVersion || !(Node{Version: message.Hello.Version, ProtocolVersion: message.Hello.ProtocolVersion}).IsCurrent() {
+				err := h.store.recordRejectedHello(context.Background(), connection.nodeID, message.ProtocolVersion, *message.Hello)
+				if err != nil {
+					connection.close(err)
+				}
 				snapshotLock.Unlock()
 				return
 			}

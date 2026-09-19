@@ -26,6 +26,8 @@ func TestHubInvokesConnectedNode(t *testing.T) {
 	}
 	hub := NewHub(store)
 	connected := make(chan struct{})
+	disconnected := make(chan string, 1)
+	hub.SetDisconnectHandler(func(nodeID string) { disconnected <- nodeID })
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := hub.Accept(w, r, node.ID); err != nil {
 			t.Errorf("accept: %v", err)
@@ -39,9 +41,8 @@ func TestHubInvokesConnectedNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer socket.Close()
 	if err := socket.WriteJSON(connectionMessage{Type: protocol.MessageNodeHello, ProtocolVersion: ConnectionProtocolVersion, Hello: &Hello{
-		DeviceID: node.DeviceID, ProtocolVersion: ConnectionProtocolVersion, Capabilities: []string{"read_file"}, UIResources: []UIResourceCapability{},
+		DeviceID: node.DeviceID, Version: RequiredVersion, ProtocolVersion: ConnectionProtocolVersion, Capabilities: []string{"read_file"}, UIResources: []UIResourceCapability{},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +70,110 @@ func TestHubInvokesConnectedNode(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+	if err := socket.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case nodeID := <-disconnected:
+		if nodeID != node.ID {
+			t.Fatalf("disconnected node = %q, want %q", nodeID, node.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("disconnect handler was not called")
+	}
+}
+
+func TestDisconnectCallbackSerializesWithReconnectHello(t *testing.T) {
+	store, _ := newTestStore(t)
+	pairing, err := store.CreatePairingCode(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.Pair(t.Context(), PairInput{Code: pairing.Code, DeviceID: "disconnect-reconnect", Name: "Reconnect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := NewHub(store)
+	hellos := make(chan struct{}, 2)
+	hub.SetHelloHandler(func(Node, Hello) { hellos <- struct{}{} })
+	disconnectEntered := make(chan struct{})
+	releaseDisconnect := make(chan struct{})
+	var disconnects atomic.Int32
+	hub.SetDisconnectHandler(func(string) {
+		if disconnects.Add(1) == 1 {
+			close(disconnectEntered)
+			<-releaseDisconnect
+		}
+	})
+	defer func() {
+		select {
+		case <-releaseDisconnect:
+		default:
+			close(releaseDisconnect)
+		}
+	}()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = hub.Accept(w, r, node.ID)
+	}))
+	defer server.Close()
+	connect := func() *websocket.Conn {
+		t.Helper()
+		socket, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := socket.WriteJSON(connectionMessage{Type: protocol.MessageNodeHello, ProtocolVersion: ConnectionProtocolVersion, Hello: &Hello{
+			DeviceID: node.DeviceID, Version: RequiredVersion, ProtocolVersion: ConnectionProtocolVersion, Capabilities: []string{"task_manage"}, UIResources: []UIResourceCapability{},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		return socket
+	}
+	first := connect()
+	var ready connectionMessage
+	if err := first.ReadJSON(&ready); err != nil || ready.Type != protocol.MessageNodeReady {
+		t.Fatalf("first ready=%#v err=%v", ready, err)
+	}
+	<-hellos
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-disconnectEntered:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect callback did not start")
+	}
+
+	second := connect()
+	defer second.Close()
+	secondReady := make(chan error, 1)
+	go func() {
+		var message connectionMessage
+		err := second.ReadJSON(&message)
+		if err == nil && message.Type != protocol.MessageNodeReady {
+			err = errors.New("unexpected reconnect response")
+		}
+		secondReady <- err
+	}()
+	select {
+	case err := <-secondReady:
+		t.Fatalf("reconnect passed the in-flight disconnect callback: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseDisconnect)
+	select {
+	case err := <-secondReady:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconnect did not resume after disconnect callback")
+	}
+	select {
+	case <-hellos:
+	case <-time.After(time.Second):
+		t.Fatal("reconnect Hello was not published")
 	}
 }
 
@@ -117,7 +222,7 @@ func TestHandshakeReadyPrecedesInvocationsDuringCatalogPublication(t *testing.T)
 				t.Cleanup(func() { _ = socket.Close() })
 				_ = socket.SetReadDeadline(time.Now().Add(5 * time.Second))
 				if err := socket.WriteJSON(connectionMessage{Type: protocol.MessageNodeHello, ProtocolVersion: ConnectionProtocolVersion,
-					Hello: &Hello{DeviceID: node.DeviceID, ProtocolVersion: ConnectionProtocolVersion, UIResources: []UIResourceCapability{}},
+					Hello: &Hello{DeviceID: node.DeviceID, Version: RequiredVersion, ProtocolVersion: ConnectionProtocolVersion, UIResources: []UIResourceCapability{}},
 				}); err != nil {
 					t.Fatal(err)
 				}
@@ -185,6 +290,7 @@ func TestHubRejectsStructurallyInvalidBridgeV2UIResourceHandshake(t *testing.T) 
 		{
 			name: "missing ui_resources",
 			hello: map[string]any{
+				"version":          RequiredVersion,
 				"protocol_version": ConnectionProtocolVersion,
 				"tools":            []any{},
 			},
@@ -192,6 +298,7 @@ func TestHubRejectsStructurallyInvalidBridgeV2UIResourceHandshake(t *testing.T) 
 		{
 			name: "malformed renderer URI",
 			hello: map[string]any{
+				"version":          RequiredVersion,
 				"protocol_version": ConnectionProtocolVersion,
 				"tools":            []any{},
 				"ui_resources": []any{map[string]any{
@@ -280,7 +387,7 @@ func TestHubRejectsPreviousBridgeProtocolGeneration(t *testing.T) {
 	defer socket.Close()
 	if err := socket.WriteJSON(connectionMessage{
 		Type: protocol.MessageNodeHello, ProtocolVersion: "3",
-		Hello: &Hello{DeviceID: node.DeviceID, ProtocolVersion: "3", UIResources: []UIResourceCapability{}},
+		Hello: &Hello{DeviceID: node.DeviceID, Version: RequiredVersion, ProtocolVersion: "3", UIResources: []UIResourceCapability{}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +448,7 @@ func TestSlowNodeSnapshotDoesNotBlockOtherNodesAndDuplicatesAreCoalesced(t *test
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = c.Close() })
-		hello := &Hello{DeviceID: node.DeviceID, ProtocolVersion: ConnectionProtocolVersion, Capabilities: []string{}, UIResources: []UIResourceCapability{}}
+		hello := &Hello{DeviceID: node.DeviceID, Version: RequiredVersion, ProtocolVersion: ConnectionProtocolVersion, Capabilities: []string{}, UIResources: []UIResourceCapability{}}
 		if err := c.WriteJSON(connectionMessage{Type: protocol.MessageNodeHello, ProtocolVersion: ConnectionProtocolVersion, Hello: hello}); err != nil {
 			t.Fatal(err)
 		}
@@ -360,7 +467,7 @@ func TestSlowNodeSnapshotDoesNotBlockOtherNodesAndDuplicatesAreCoalesced(t *test
 	if err := fast.ReadJSON(&ready); err != nil {
 		t.Fatalf("unrelated node blocked: %v", err)
 	}
-	hello := &Hello{DeviceID: nodes[1].DeviceID, ProtocolVersion: ConnectionProtocolVersion, Capabilities: []string{}, UIResources: []UIResourceCapability{}}
+	hello := &Hello{DeviceID: nodes[1].DeviceID, Version: RequiredVersion, ProtocolVersion: ConnectionProtocolVersion, Capabilities: []string{}, UIResources: []UIResourceCapability{}}
 	for i := 0; i < 4; i++ {
 		if err := fast.WriteJSON(connectionMessage{Type: protocol.MessageNodeUpdated, ProtocolVersion: ConnectionProtocolVersion, Hello: hello}); err != nil {
 			t.Fatal(err)

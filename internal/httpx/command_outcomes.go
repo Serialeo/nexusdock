@@ -44,7 +44,7 @@ func (s *Server) collectCommandOutcomes(ctx context.Context) {
 	slots := make(chan struct{}, 4)
 	var workers sync.WaitGroup
 	for _, node := range nodes {
-		if !node.Enabled || !nodeUsesCurrentBridgeProtocol(node) || !s.agentDockHub.Online(node.ID) {
+		if !node.Enabled || !node.IsCurrent() || !s.agentDockHub.Online(node.ID) {
 			continue
 		}
 		capabilities, capErr := s.agentDock.BridgeCapabilities(ctx, node.ID)

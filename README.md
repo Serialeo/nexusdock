@@ -240,7 +240,7 @@ curl http://127.0.0.1:18777/health
 
 如果使用固定版本，先把 `image:` 调整到同一 release manifest 验证过的版本对。Project-first 源码使用 **Bridge v4**（`ConnectionProtocolVersion = "4"`），与 Bridge v3 及更早 wire 不兼容；AgentDock 与 NexusDock 必须同时使用包含同一 Bridge v4 契约的 `agentdock-protocol` release。AgentDock `v0.9.5` 与 NexusDock `v0.9.5` 均固定依赖 `agentdock-protocol v0.11.0`，请按此版本对统一升级；内置能力开关和 stdio 管理步骤见 [内置能力管理与升级边界](docs/builtin-capabilities.md)。升级到 Project-first 版本时会删除旧 Global/Node Instructions 表，而不会迁移其中正文；稳定 Node identity、Project/Deployment/WorkSession、Recall、秘密与其他无关状态继续保留。
 
-不支持只回滚 AgentDock 或只回滚 NexusDock 到旧 Bridge generation。需要跨 v4 边界回滚时，应同时回滚 A/N，并优先使用升级前的 `nexus-data` 备份恢复控制面数据；不要依赖新版数据库继续为旧运行时代际提供协议兼容。Bridge v4 启动时不会恢复上一 generation 的持久 node-tool 发布缓存，当前节点重新完成 v4 Hello 后会按新契约重建。
+不支持只回滚 AgentDock 或只回滚 NexusDock 到旧 Bridge generation。需要跨 v4 边界回滚时，应同时回滚 A/N，并优先使用升级前的 `nexus-data` 备份恢复控制面数据；不要依赖新版数据库继续为旧运行时代际提供协议兼容。Nexus 使用 `internal/agentdock/version.go` 中的 `RequiredVersion` 严格校验节点版本（当前为 `0.9.5`），发布新版时必须同步更新此值；同为 Bridge v4 的旧版、未知版和其他未配套版本也会被拒绝。非当前节点只在管理员目录保留升级诊断信息，不进入远端 AI 的节点、工具、资源、Project Target 或历史续接入口。启动时不恢复持久 node-tool 发布缓存，当前版本节点完成 Hello 后才重建工具目录。
 
 不要运行两个 NexusDock 实例同时写同一份 `nexus-data`；当前配置 revision/mutex 设计只承诺单 writer 进程，不宣称多个 NexusDock 进程共享同一 SQLite 时有跨进程顺序保证。
 
@@ -360,5 +360,6 @@ AgentDock 与 NexusDock 的候选、正式标签各自发布，不会相互创�
 
 节点使用 `node.updated` 发送完整工具快照，汇总目录随之增删并通过 SDK 通知
 已订阅 `subscriptions/listen` 的 MCP 客户端。未订阅的客户端需重新列出工具，
-缓存工具调用仍受 AgentDock 运行时门禁约束。节点离线沿用现有契约保留策略，
-调用返回离线错误；重连只采用该节点新上报的实际状态。
+缓存工具调用仍受当前版本和 AgentDock 运行时门禁约束。最后一个在线当前版本 provider
+断线后立即下架工具；重连只采用新 Hello。旧节点不会参与契约合并，也不会阻止最新
+工具参数和使用说明发布。同一当前版本的平台可选参数保留，契约冲突显式撤下并记录错误。

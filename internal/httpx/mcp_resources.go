@@ -53,19 +53,12 @@ func (s *Server) syncMCPAppResources() {
 	}
 	if err != nil {
 		if s.logger != nil {
-			s.logger.Warn("同步 AgentDock MCP App resource 目录失败，保留已发布节点资源", "error", err)
+			s.logger.Warn("同步 AgentDock MCP App resource 目录失败，撤下节点资源", "error", err)
 		}
-		if desired == nil {
-			desired = make(map[string]struct{})
-		}
-		// Nexus 自有 UI 不应受节点目录故障影响；节点目录暂不可读时也保留已经发布的 relay resource。
+		desired = make(map[string]struct{})
+		// 无法验证当前节点版本时不沿用历史发布结果；Nexus 自有资源不依赖节点。
 		for _, app := range nexusOwnedMCPApps {
 			desired[app.URI] = struct{}{}
-		}
-		for uri := range s.mcpResources {
-			if _, local := nexusOwnedMCPAppByURI(uri); !local {
-				desired[uri] = struct{}{}
-			}
 		}
 	}
 
@@ -130,7 +123,7 @@ func (s *Server) publishedMCPAppResourceURIs(ctx context.Context) (map[string]st
 		return uris, err
 	}
 	for _, node := range nodes {
-		if !node.Enabled {
+		if !node.Enabled || !node.IsCurrent() {
 			continue
 		}
 		resources, err := s.agentDock.UIResources(ctx, node.ID)
@@ -186,7 +179,7 @@ func (s *Server) readMCPAppResourceWithTimeout(ctx context.Context, nodes []agen
 	foundCompatibleProvider := false
 	var lastErr error
 	for _, node := range nodes {
-		if !node.Enabled {
+		if !node.Enabled || !node.IsCurrent() {
 			continue
 		}
 		resources, resourceErr := s.agentDock.UIResources(ctx, node.ID)
@@ -255,7 +248,6 @@ func decodeNodeMCPAppResource(uri string, result map[string]any, publicURL strin
 			return nil, fmt.Errorf("节点 MCP App resource %s 返回了无效内容", uri)
 		}
 		// Resource 由 Nexus 对外提供，不能沿用节点域；组件必须使用 Nexus 自己的唯一公网 origin。
-		content.Text = mcpresult.AdaptWidgetHTML(content.Text)
 		content.Meta = nexusMCPAppResourceMeta(publicURL)
 	}
 	return &read, nil

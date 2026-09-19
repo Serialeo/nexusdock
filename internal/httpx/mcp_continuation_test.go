@@ -8,6 +8,7 @@ import (
 	"time"
 
 	protocol "github.com/Serialeo/agentdock-protocol"
+	"github.com/uvwt/nexusdock/internal/agentdock"
 	projectstore "github.com/uvwt/nexusdock/internal/project"
 )
 
@@ -175,7 +176,7 @@ func TestContinuationCompleteCycleMatchesEveryPublishedOutputContract(t *testing
 	if nodeErr != nil {
 		t.Fatal(nodeErr)
 	}
-	if _, err = server.agentDock.UpdateHello(ctx, deployment.NodeID, protocol.Hello{DeviceID: node.DeviceID, ProtocolVersion: protocol.ConnectionProtocolVersion, UIResources: []protocol.UIResourceCapability{}, Capabilities: []string{}, Tools: []protocol.ToolDescriptor{}, BridgeCapabilities: []string{protocol.CommandOutcomesCapability}}); err != nil {
+	if _, err = server.agentDock.UpdateHello(ctx, deployment.NodeID, protocol.Hello{DeviceID: node.DeviceID, Version: agentdock.RequiredVersion, ProtocolVersion: protocol.ConnectionProtocolVersion, UIResources: []protocol.UIResourceCapability{}, Capabilities: []string{}, Tools: []protocol.ToolDescriptor{}, BridgeCapabilities: []string{protocol.CommandOutcomesCapability}}); err != nil {
 		t.Fatal(err)
 	}
 	call := func(name string, args map[string]any) (map[string]any, map[string]any) {

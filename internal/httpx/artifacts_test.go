@@ -53,7 +53,7 @@ func TestNexusSignedArtifactURLStreamsFromConnectedNode(t *testing.T) {
 	if err := socket.WriteJSON(map[string]any{
 		"type": protocol.MessageNodeHello, "protocol_version": agentdock.ConnectionProtocolVersion,
 		"hello": map[string]any{
-			"device_id": node.DeviceID, "protocol_version": agentdock.ConnectionProtocolVersion,
+			"device_id": node.DeviceID, "version": agentdock.RequiredVersion, "protocol_version": agentdock.ConnectionProtocolVersion,
 			"capabilities": []string{}, "bridge_capabilities": []string{protocol.ArtifactReadCapability}, "tools": []any{}, "ui_resources": []any{},
 		},
 	}); err != nil {
@@ -452,7 +452,7 @@ func startArtifactBridgeNode(t *testing.T, payload []byte, advertisedSHA string,
 	if err := socket.WriteJSON(map[string]any{
 		"type": protocol.MessageNodeHello, "protocol_version": agentdock.ConnectionProtocolVersion,
 		"hello": map[string]any{
-			"device_id": node.DeviceID, "protocol_version": agentdock.ConnectionProtocolVersion,
+			"device_id": node.DeviceID, "version": agentdock.RequiredVersion, "protocol_version": agentdock.ConnectionProtocolVersion,
 			"capabilities": []string{}, "bridge_capabilities": []string{protocol.ArtifactReadCapability}, "tools": []any{}, "ui_resources": []any{},
 		},
 	}); err != nil {

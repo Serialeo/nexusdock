@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// PublishedToolContract 是 Nexus 对外保持稳定的单工具契约。
-// Descriptor 描述整个 Fleet 的公开 schema；AcceptedSemanticHashes 则固定这一代公开契约允许调用的真实节点变体。
+// PublishedToolContract 记录当前已准入 release 的工具目录；启动时清空，不能恢复节点发布。
+// AcceptedSemanticHashes 仅记录当前平台输入来源，不参与跨版本兼容或调用回退。
 type PublishedToolContract struct {
 	ToolName               string
 	Descriptor             ToolDescriptor

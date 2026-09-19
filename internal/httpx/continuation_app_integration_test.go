@@ -14,6 +14,7 @@ import (
 
 	protocol "github.com/Serialeo/agentdock-protocol"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/uvwt/nexusdock/internal/agentdock"
 	"github.com/uvwt/nexusdock/internal/auth"
 	projectstore "github.com/uvwt/nexusdock/internal/project"
 )
@@ -47,7 +48,7 @@ func TestContinuationAppHTTPStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = server.agentDock.UpdateHello(ctx, deployment.NodeID, protocol.Hello{DeviceID: device.DeviceID, ProtocolVersion: protocol.ConnectionProtocolVersion, UIResources: []protocol.UIResourceCapability{}, Capabilities: []string{}, Tools: []protocol.ToolDescriptor{}, BridgeCapabilities: []string{protocol.CommandOutcomesCapability}}); err != nil {
+	if _, err = server.agentDock.UpdateHello(ctx, deployment.NodeID, protocol.Hello{DeviceID: device.DeviceID, Version: agentdock.RequiredVersion, ProtocolVersion: protocol.ConnectionProtocolVersion, UIResources: []protocol.UIResourceCapability{}, Capabilities: []string{}, Tools: []protocol.ToolDescriptor{}, BridgeCapabilities: []string{protocol.CommandOutcomesCapability}}); err != nil {
 		t.Fatal(err)
 	}
 	const owner = "mcp:dedicated-token"

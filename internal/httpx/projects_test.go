@@ -652,6 +652,10 @@ func pairProjectHTTPTestNode(t *testing.T, store *agentdock.Store, deviceID, nam
 	if err != nil {
 		t.Fatal(err)
 	}
+	node, err = store.UpdateHello(t.Context(), node.ID, agentdock.Hello{DeviceID: node.DeviceID, Version: agentdock.RequiredVersion, ProtocolVersion: agentdock.ConnectionProtocolVersion, UIResources: []agentdock.UIResourceCapability{}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return node
 }
 
@@ -743,7 +747,7 @@ func connectProjectFakeNodeWithTools(t *testing.T, server *Server, node agentdoc
 	hello := protocol.Message{
 		Type: protocol.MessageNodeHello, ProtocolVersion: protocol.ConnectionProtocolVersion,
 		Hello: &protocol.Hello{
-			DeviceID: node.DeviceID, Version: "test", ProtocolVersion: protocol.ConnectionProtocolVersion, OS: "linux", Arch: "amd64",
+			DeviceID: node.DeviceID, Version: agentdock.RequiredVersion, ProtocolVersion: protocol.ConnectionProtocolVersion, OS: "linux", Arch: "amd64",
 			Capabilities: capabilities, BridgeCapabilities: []string{}, ToolContractHash: "", Tools: tools, UIResources: []protocol.UIResourceCapability{},
 		},
 	}

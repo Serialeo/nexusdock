@@ -23,9 +23,9 @@ func TestSyncMCPAppResourcesPublishesAdvertisedUIResources(t *testing.T) {
 		Name: "file_edit",
 		Meta: map[string]any{"ui": map[string]any{"resourceUri": protocol.TaskProgressUIResourceURI}},
 	}
-	node := pairHTTPTestNode(t, store, "device_resource_catalog", "DockMini", "2.0.0", descriptor)
+	node := pairHTTPTestNode(t, store, "device_resource_catalog", "DockMini", agentdock.RequiredVersion, descriptor)
 	if _, err := store.UpdateHello(t.Context(), node.ID, agentdock.Hello{
-		DeviceID: node.DeviceID, ProtocolVersion: agentdock.ConnectionProtocolVersion,
+		DeviceID: node.DeviceID, Version: agentdock.RequiredVersion, ProtocolVersion: agentdock.ConnectionProtocolVersion,
 		Tools: []agentdock.ToolDescriptor{descriptor},
 		UIResources: []agentdock.UIResourceCapability{{
 			URI: protocol.FileChangeUIResourceURI, Contract: protocol.FileChangeUIContract, MIMEType: protocol.MCPAppMIMEType,
@@ -144,12 +144,12 @@ func TestNexusOwnedMCPAppResourcesDoNotRequireAgentDockProvider(t *testing.T) {
 func TestMCPAppsToggleRemovesRelayButKeepsPersistedCapabilities(t *testing.T) {
 	store := newHTTPTestAgentDockStore(t)
 	descriptor := agentdock.ToolDescriptor{Name: "file_edit", InputSchema: map[string]any{"type": "object"}}
-	node := pairHTTPTestNode(t, store, "device_resource_toggle", "DockMini", "2.0.0", descriptor)
+	node := pairHTTPTestNode(t, store, "device_resource_toggle", "DockMini", agentdock.RequiredVersion, descriptor)
 	capability := agentdock.UIResourceCapability{
 		URI: protocol.FileChangeUIResourceURI, Contract: protocol.FileChangeUIContract, MIMEType: protocol.MCPAppMIMEType,
 	}
 	if _, err := store.UpdateHello(t.Context(), node.ID, agentdock.Hello{
-		DeviceID: node.DeviceID, ProtocolVersion: agentdock.ConnectionProtocolVersion,
+		DeviceID: node.DeviceID, Version: agentdock.RequiredVersion, ProtocolVersion: agentdock.ConnectionProtocolVersion,
 		Tools: []agentdock.ToolDescriptor{descriptor}, UIResources: []agentdock.UIResourceCapability{capability},
 	}); err != nil {
 		t.Fatal(err)
@@ -186,13 +186,13 @@ func TestMCPAppsToggleRemovesRelayButKeepsPersistedCapabilities(t *testing.T) {
 func TestPublishedMCPAppResourcesRecoverFromPersistedCapabilities(t *testing.T) {
 	store := newHTTPTestAgentDockStore(t)
 	descriptor := agentdock.ToolDescriptor{Name: "read_file", InputSchema: map[string]any{"type": "object"}}
-	node := pairHTTPTestNode(t, store, "device_resource_restart", "DockMini", "2.0.0", descriptor)
+	node := pairHTTPTestNode(t, store, "device_resource_restart", "DockMini", agentdock.RequiredVersion, descriptor)
 	capabilities := []agentdock.UIResourceCapability{
 		{URI: protocol.FileChangeUIResourceURI, Contract: protocol.FileChangeUIContract, MIMEType: protocol.MCPAppMIMEType},
 		{URI: protocol.ACPStatusUIResourceURI, Contract: protocol.ACPStatusUIContract, MIMEType: protocol.MCPAppMIMEType},
 	}
 	if _, err := store.UpdateHello(t.Context(), node.ID, agentdock.Hello{
-		DeviceID: node.DeviceID, ProtocolVersion: agentdock.ConnectionProtocolVersion,
+		DeviceID: node.DeviceID, Version: agentdock.RequiredVersion, ProtocolVersion: agentdock.ConnectionProtocolVersion,
 		Tools: []agentdock.ToolDescriptor{descriptor}, UIResources: capabilities,
 	}); err != nil {
 		t.Fatal(err)
@@ -294,8 +294,8 @@ func TestMCPAppResourceSelectsOnlyExplicitCapableProvider(t *testing.T) {
 		Meta: map[string]any{"ui": map[string]any{"resourceUri": protocol.TaskProgressUIResourceURI}},
 	}
 	capableDescriptor := agentdock.ToolDescriptor{Name: "task_manage", InputSchema: map[string]any{"type": "object"}}
-	withoutResource := pairHTTPTestNode(t, store, "device_resource_none", "A Without Resource", "2.0.0", bindingOnlyDescriptor)
-	withResource := pairHTTPTestNode(t, store, "device_resource_capable", "B Capable", "2.0.0", capableDescriptor)
+	withoutResource := pairHTTPTestNode(t, store, "device_resource_none", "A Without Resource", agentdock.RequiredVersion, bindingOnlyDescriptor)
+	withResource := pairHTTPTestNode(t, store, "device_resource_capable", "B Capable", agentdock.RequiredVersion, capableDescriptor)
 	hub := agentdock.NewHub(store)
 
 	// Presentation binding is deliberately insufficient: this node advertises _meta.ui but no ui_resources capability.
@@ -333,7 +333,7 @@ func TestMCPAppResourceSelectsOnlyExplicitCapableProvider(t *testing.T) {
 func TestMCPAppResourceBoundsStalledCompatibleProvider(t *testing.T) {
 	store := newHTTPTestAgentDockStore(t)
 	descriptor := agentdock.ToolDescriptor{Name: "task_manage", InputSchema: map[string]any{"type": "object"}}
-	node := pairHTTPTestNode(t, store, "device_resource_stalled", "Stalled", "2.0.0", descriptor)
+	node := pairHTTPTestNode(t, store, "device_resource_stalled", "Stalled", agentdock.RequiredVersion, descriptor)
 	hub := agentdock.NewHub(store)
 	capability := agentdock.UIResourceCapability{
 		URI: protocol.TaskProgressUIResourceURI, Contract: protocol.TaskProgressUIContract, MIMEType: protocol.MCPAppMIMEType,

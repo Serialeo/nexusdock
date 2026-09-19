@@ -143,7 +143,7 @@ func (s *Server) projectPromptReadyDeployment(w http.ResponseWriter, r *http.Req
 		writeProjectError(w, err)
 		return projectstore.Deployment{}, false
 	}
-	if !node.Enabled || !nodeUsesCurrentBridgeProtocol(node) || !s.agentDockHub.Online(node.ID) {
+	if !node.Enabled || !node.IsCurrent() || !s.agentDockHub.Online(node.ID) {
 		writeError(w, http.StatusServiceUnavailable, protocol.ErrorDeploymentNotReady, "目标 AgentDock 未在线并完成 Bridge v4 握手")
 		return projectstore.Deployment{}, false
 	}

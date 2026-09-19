@@ -84,17 +84,17 @@ func TestToolVisibilitySurvivesPresentationDivergence(t *testing.T) {
 func TestToolVisibilityConflictRetiresPreviouslyPublishedTool(t *testing.T) {
 	store := newHTTPTestAgentDockStore(t)
 	app := visibilityDescriptor([]string{"app"})
-	first := pairHTTPTestNode(t, store, "device_visfirst", "First", "1", app)
-	second := pairHTTPTestNode(t, store, "device_vissecond", "Second", "1", app)
+	first := pairHTTPTestNode(t, store, "device_visfirst", "First", agentdock.RequiredVersion, app)
+	second := pairHTTPTestNode(t, store, "device_vissecond", "Second", agentdock.RequiredVersion, app)
 	server := &Server{cfg: config.Config{MCPAppsEnabled: true}, agentDock: store,
 		mcpServer: mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test", Version: "1"}, nil), mcpTools: make(map[string]publishedNodeTool)}
-	server.registerNodeTools(first, agentdock.Hello{Tools: []agentdock.ToolDescriptor{app}})
+	server.registerNodeTools(first, agentdock.Hello{Version: agentdock.RequiredVersion, Tools: []agentdock.ToolDescriptor{app}})
 	if _, ok := server.publishedNodeTool(app.Name); !ok {
 		t.Fatal("initial app-only tool missing")
 	}
 	model := visibilityDescriptor([]string{"model"})
-	second = updateHTTPTestNodeContract(t, store, second, "2", model)
-	server.registerNodeTools(second, agentdock.Hello{Tools: []agentdock.ToolDescriptor{model}})
+	second = updateHTTPTestNodeContract(t, store, second, agentdock.RequiredVersion, model)
+	server.registerNodeTools(second, agentdock.Hello{Version: agentdock.RequiredVersion, Tools: []agentdock.ToolDescriptor{model}})
 	if _, ok := server.publishedNodeTool(app.Name); ok {
 		t.Fatal("visibility conflict retained old published tool")
 	}
@@ -103,18 +103,18 @@ func TestToolVisibilityConflictRetiresPreviouslyPublishedTool(t *testing.T) {
 		t.Fatalf("unsafe persisted contract remains: %#v, %v", contracts, err)
 	}
 	// 同一旧 provider 再次 Hello 也不能趁无 published 条目重新公开工具。
-	server.registerNodeTools(first, agentdock.Hello{Tools: []agentdock.ToolDescriptor{app}})
+	server.registerNodeTools(first, agentdock.Hello{Version: agentdock.RequiredVersion, Tools: []agentdock.ToolDescriptor{app}})
 	if _, ok := server.publishedNodeTool(app.Name); ok {
 		t.Fatal("repeated Hello republished conflicting tool")
 	}
-	second = updateHTTPTestNodeContract(t, store, second, "3", app)
-	server.registerNodeTools(second, agentdock.Hello{Tools: []agentdock.ToolDescriptor{app}})
+	second = updateHTTPTestNodeContract(t, store, second, agentdock.RequiredVersion, app)
+	server.registerNodeTools(second, agentdock.Hello{Version: agentdock.RequiredVersion, Tools: []agentdock.ToolDescriptor{app}})
 	if _, ok := server.publishedNodeTool(app.Name); !ok {
 		t.Fatal("converged visibility did not restore tool")
 	}
 	invalid := visibilityDescriptor("app")
-	second = updateHTTPTestNodeContract(t, store, second, "4", invalid)
-	server.registerNodeTools(second, agentdock.Hello{Tools: []agentdock.ToolDescriptor{invalid}})
+	second = updateHTTPTestNodeContract(t, store, second, agentdock.RequiredVersion, invalid)
+	server.registerNodeTools(second, agentdock.Hello{Version: agentdock.RequiredVersion, Tools: []agentdock.ToolDescriptor{invalid}})
 	if _, ok := server.publishedNodeTool(app.Name); ok {
 		t.Fatal("malformed visibility retained old published tool")
 	}
@@ -124,7 +124,7 @@ func TestToolVisibilityAppsToggleRemovesAndRestoresAppOnlyTool(t *testing.T) {
 	server := &Server{cfg: config.Config{MCPAppsEnabled: true}, mcpTools: make(map[string]publishedNodeTool), mcpResources: make(map[string]struct{})}
 	server.initializeMCPGateway()
 	descriptor := visibilityDescriptor([]string{"app"})
-	server.registerNodeTools(agentdock.Node{}, agentdock.Hello{Tools: []agentdock.ToolDescriptor{descriptor}})
+	server.registerNodeTools(agentdock.Node{ID: "test-node", Enabled: true, Version: agentdock.RequiredVersion, ProtocolVersion: agentdock.ConnectionProtocolVersion}, agentdock.Hello{Version: agentdock.RequiredVersion, Tools: []agentdock.ToolDescriptor{descriptor}})
 	clientTransport, serverTransport := mcpsdk.NewInMemoryTransports()
 	serverSession, err := server.mcpServer.Connect(t.Context(), serverTransport, nil)
 	if err != nil {

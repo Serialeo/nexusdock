@@ -11,7 +11,7 @@ func WidgetHTML(view, title string) string {
 	return AdaptWidgetHTML(mcpapps.HTML(view, title))
 }
 
-// 兼容同一 UI contract 的旧节点组件，只在已知模板插入点适配，且重复代理不重复注入。
+// 为当前依赖中的 Nexus 自有 UI 模板补充展示字段推导；节点 HTML 由节点生成，转发时不改写。
 func AdaptWidgetHTML(html string) string {
 	if strings.Contains(html, "function compactViewData(") {
 		return html

@@ -117,7 +117,7 @@ func Project(name string, input map[string]any) map[string]any {
 					delete(item, "match_text")
 				}
 			}
-			// 只有确实可从行号/上下文推导时才删除；旧节点可能提供非连续上下文。
+			// 只有确实可从行号/上下文推导时才删除；搜索结果可能包含非连续上下文。
 			if integer(item["context_start_line"]) == integer(item["line"])-int64(length(item["before"])) {
 				delete(item, "context_start_line")
 			}

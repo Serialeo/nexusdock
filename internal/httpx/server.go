@@ -114,6 +114,8 @@ type Server struct {
 	mcpServer            *mcpsdk.Server
 	mcpHandler           http.Handler
 	mcpReconcileMu       sync.Mutex
+	mcpNodeToolsMu       sync.RWMutex
+	mcpNodeTools         map[string]map[string]agentdock.ToolDescriptor
 	operationMu          sync.Mutex
 	operationLocks       map[operationLockKey]*operationLock
 	mcpToolsMu           sync.RWMutex
@@ -207,7 +209,8 @@ func WithMCPTokenStore(store *auth.MCPTokenStore) ServerOption {
 func NewServer(cfg config.Config, store *recall.Store, versions *versioning.Manager, logger *slog.Logger, options ...ServerOption) *Server {
 	server := &Server{
 		cfg: cfg, aiCfg: cfg, aiCfgSet: true, store: store, versions: versions, logger: logger,
-		stage3Wake: make(chan struct{}, 1), mcpTools: make(map[string]publishedNodeTool), mcpResources: make(map[string]struct{}),
+		stage3Wake: make(chan struct{}, 1), mcpTools: make(map[string]publishedNodeTool),
+		mcpNodeTools: make(map[string]map[string]agentdock.ToolDescriptor), mcpResources: make(map[string]struct{}),
 	}
 	for _, option := range options {
 		option(server)

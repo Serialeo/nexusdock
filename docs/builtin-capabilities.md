@@ -8,7 +8,7 @@ Bridge 对单个节点串行提交完整快照和连接代次，不同节点使�
 
 ## 配套升级
 
-当前配套版本为 AgentDock `v0.9.5`、NexusDock `v0.9.5` 和共享协议 `v0.11.0`，升级时统一重部署，不支持混合旧版 AgentDock/Nexus，也不迁移旧开关。热更新管理的最低支持版本仍为 `v0.9.4`。连接协议版本号本身不能证明节点支持热更新。
+当前配套版本为 AgentDock `v0.9.5`、NexusDock `v0.9.5` 和共享协议 `v0.11.0`，升级时统一重部署，不支持混合旧版 AgentDock/Nexus，也不迁移旧开关。Nexus 仅准入 `RequiredVersion = "0.9.5"`；软件版本与 Bridge 协议必须同时精确匹配。旧节点、未知版本和未配套版本不会进入远端 AI 可见目录或历史执行入口，也不会参与工具契约合并。下一次配套发布必须同步更新 `internal/agentdock/version.go` 中的版本要求。
 
 先停止旧服务并备份需要保留的数据，清理 AgentDock 启动定义中的旧 browser/ACP 环境开关和 CLI 参数。准备配套构建，先启动 Nexus，再启动所有新版 AgentDock；统一升级完成前暂停工作流流量。首次启用通过 GUI 或 AgentDock 的 `builtins` CLI 选择。详细 stdio 管理命令、损坏配置恢复与启动超时策略见 AgentDock 仓库 `docs/builtin-capabilities.md`。数据库清理或重建由部署人员处理，本次代码修补不执行数据库操作。
 

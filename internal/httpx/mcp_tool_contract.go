@@ -16,8 +16,6 @@ import (
 	"github.com/uvwt/nexusdock/internal/mcpresult"
 )
 
-const maxToolContractDifferences = 5
-
 var errIncompatibleToolContract = errors.New("AgentDock 工具契约不可安全合并")
 
 var errUnsafeToolVisibility = errors.New("AgentDock 工具 visibility 无效或不一致")
@@ -28,24 +26,6 @@ type publishedNodeTool struct {
 	AcceptedSemanticHashes []string
 }
 
-type toolContractDifference struct {
-	Path      string `json:"path"`
-	Published any    `json:"published"`
-	Node      any    `json:"node"`
-}
-
-type toolContractMismatch struct {
-	Code          string                   `json:"code"`
-	Message       string                   `json:"message"`
-	Tool          string                   `json:"tool"`
-	NodeID        string                   `json:"node_id"`
-	NodeName      string                   `json:"node_name,omitempty"`
-	NodeVersion   string                   `json:"node_version,omitempty"`
-	PublishedHash string                   `json:"published_hash"`
-	NodeHash      string                   `json:"node_hash"`
-	Differences   []toolContractDifference `json:"differences,omitempty"`
-}
-
 type comparableToolContract struct {
 	InputSchema  map[string]any `json:"inputSchema"`
 	OutputSchema map[string]any `json:"outputSchema,omitempty"`
@@ -54,78 +34,6 @@ type comparableToolContract struct {
 
 func isNexusCentralTool(name string) bool {
 	return mcpcontract.IsCanonicalTool(name)
-}
-
-func fleetToolPresentation(name string) (string, string) {
-	name = strings.TrimSpace(name)
-	return "AgentDock node tool: " + name,
-		"Route the AgentDock tool " + name + " through the work_session_id and target_id returned by project_open, node_open, or project_context. The target AgentDock validates arguments against its local tool contract."
-}
-
-func sanitizeFleetToolDescriptor(descriptor agentdock.ToolDescriptor) (agentdock.ToolDescriptor, error) {
-	sanitized := descriptor
-	sanitized.Title, sanitized.Description = fleetToolPresentation(sanitized.Name)
-	sanitized.InputSchema = stripSchemaPresentation(sanitized.InputSchema)
-	sanitized.OutputSchema = stripSchemaPresentation(sanitized.OutputSchema)
-	return sanitized, nil
-}
-
-func stripSchemaPresentation(schema map[string]any) map[string]any {
-	if schema == nil {
-		return nil
-	}
-	return stripSchemaPresentationObject(schema)
-}
-
-func stripSchemaPresentationObject(schema map[string]any) map[string]any {
-	result := make(map[string]any, len(schema))
-	for key, value := range schema {
-		if key == "title" || key == "description" {
-			continue
-		}
-		result[key] = stripSchemaPresentationValue(key, value)
-	}
-	return result
-}
-
-func stripSchemaPresentationValue(key string, value any) any {
-	switch key {
-	case "properties", "patternProperties", "$defs", "definitions", "dependentSchemas":
-		mapping, ok := value.(map[string]any)
-		if !ok {
-			return value
-		}
-		result := make(map[string]any, len(mapping))
-		for name, child := range mapping {
-			if childSchema, ok := child.(map[string]any); ok {
-				result[name] = stripSchemaPresentationObject(childSchema)
-			} else {
-				result[name] = child
-			}
-		}
-		return result
-	case "items", "contains", "not", "if", "then", "else", "propertyNames", "additionalProperties", "unevaluatedProperties":
-		if childSchema, ok := value.(map[string]any); ok {
-			return stripSchemaPresentationObject(childSchema)
-		}
-		return value
-	case "allOf", "anyOf", "oneOf", "prefixItems":
-		items, ok := value.([]any)
-		if !ok {
-			return value
-		}
-		result := make([]any, len(items))
-		for index, child := range items {
-			if childSchema, ok := child.(map[string]any); ok {
-				result[index] = stripSchemaPresentationObject(childSchema)
-			} else {
-				result[index] = child
-			}
-		}
-		return result
-	default:
-		return value
-	}
 }
 
 func toolContractHash(descriptor agentdock.ToolDescriptor) (string, error) {
@@ -290,6 +198,20 @@ func (s *Server) publishedNodeToolNames() []string {
 }
 
 func (s *Server) resetPersistedNodeToolCatalog(ctx context.Context) error {
+	s.mcpNodeToolsMu.Lock()
+	s.mcpNodeTools = make(map[string]map[string]agentdock.ToolDescriptor)
+	s.mcpNodeToolsMu.Unlock()
+	s.mcpToolsMu.Lock()
+	staleNames := make([]string, 0, len(s.mcpTools))
+	for name := range s.mcpTools {
+		staleNames = append(staleNames, name)
+	}
+	s.mcpTools = make(map[string]publishedNodeTool)
+	s.mcpToolsMu.Unlock()
+	if server := s.currentMCPServer(); server != nil {
+		server.RemoveTools(staleNames...)
+	}
+
 	contracts, err := s.agentDock.ListPublishedToolContracts(ctx)
 	if err != nil {
 		return err
@@ -306,6 +228,72 @@ func (s *Server) resetPersistedNodeToolCatalog(ctx context.Context) error {
 	return nil
 }
 
+// replaceLiveNodeToolSnapshot records one connected node's complete Hello tool
+// snapshot. Persisted Hello descriptors are deliberately not used here: they
+// describe the last connection, not the providers available in this process.
+func (s *Server) replaceLiveNodeToolSnapshot(nodeID string, descriptors []agentdock.ToolDescriptor) []string {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return nil
+	}
+	next := make(map[string]agentdock.ToolDescriptor)
+	for _, descriptor := range descriptors {
+		name := strings.TrimSpace(descriptor.Name)
+		if name == "" || mcpcontract.IsCanonicalTool(name) || unavailableAgentDockToolName(name) {
+			continue
+		}
+		next[name] = descriptor
+	}
+	s.mcpNodeToolsMu.Lock()
+	if s.mcpNodeTools == nil {
+		s.mcpNodeTools = make(map[string]map[string]agentdock.ToolDescriptor)
+	}
+	previous := s.mcpNodeTools[nodeID]
+	s.mcpNodeTools[nodeID] = next
+	s.mcpNodeToolsMu.Unlock()
+	names := make([]string, 0, len(previous)+len(next))
+	for name := range previous {
+		names = append(names, name)
+	}
+	for name := range next {
+		names = append(names, name)
+	}
+	return names
+}
+
+func (s *Server) removeLiveNodeToolSnapshot(nodeID string) []string {
+	s.mcpNodeToolsMu.Lock()
+	previous := s.mcpNodeTools[strings.TrimSpace(nodeID)]
+	delete(s.mcpNodeTools, strings.TrimSpace(nodeID))
+	s.mcpNodeToolsMu.Unlock()
+	names := make([]string, 0, len(previous))
+	for name := range previous {
+		names = append(names, name)
+	}
+	return names
+}
+
+func (s *Server) liveNodeToolDescriptors(name string) []agentdock.ToolDescriptor {
+	s.mcpNodeToolsMu.RLock()
+	defer s.mcpNodeToolsMu.RUnlock()
+	descriptors := make([]agentdock.ToolDescriptor, 0)
+	nodeIDs := make([]string, 0, len(s.mcpNodeTools))
+	for nodeID := range s.mcpNodeTools {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	sort.Strings(nodeIDs)
+	for _, nodeID := range nodeIDs {
+		if descriptor, ok := s.mcpNodeTools[nodeID][name]; ok {
+			descriptors = append(descriptors, descriptor)
+		}
+	}
+	return descriptors
+}
+
+func (s *Server) handleAgentDockDisconnect(nodeID string) {
+	s.reconcileNodeToolContracts(s.removeLiveNodeToolSnapshot(nodeID))
+}
+
 func (s *Server) persistPublishedNodeTool(ctx context.Context, published publishedNodeTool) error {
 	if s.agentDock == nil {
 		return nil
@@ -316,127 +304,52 @@ func (s *Server) persistPublishedNodeTool(ctx context.Context, published publish
 	})
 }
 
+// 只合并已准入当前 release 的平台差异。冲突时撤下工具，绝不选旧 schema 或保留上一份目录。
 func (s *Server) reconcileFleetNodeTool(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" || isNexusCentralTool(name) {
 		return nil
 	}
-	if unavailableAgentDockToolName(name) {
-		ctx := context.Background()
-		if s.agentDock != nil {
-			if err := s.agentDock.DeletePublishedToolContract(ctx, name); err != nil {
-				return err
-			}
-		}
-		s.mcpToolsMu.Lock()
-		delete(s.mcpTools, name)
-		s.mcpToolsMu.Unlock()
-		if server := s.currentMCPServer(); server != nil {
-			server.RemoveTools(name)
-		}
-		return nil
-	}
-	if s.agentDock == nil {
-		return nil
-	}
-	// 节点状态先落库再触发 reconcile；串行化整个快照到发布过程，避免旧快照晚于新快照覆盖 published generation。
 	s.mcpReconcileMu.Lock()
 	defer s.mcpReconcileMu.Unlock()
-
 	ctx := context.Background()
-	nodes, err := s.agentDock.List(ctx)
+	descriptors := s.liveNodeToolDescriptors(name)
+	if unavailableAgentDockToolName(name) || len(descriptors) == 0 {
+		return s.retireNodeTool(ctx, name)
+	}
+	descriptor, hashes, err := mergeFleetToolDescriptors(descriptors)
 	if err != nil {
-		return err
+		return errors.Join(err, s.retireNodeTool(ctx, name))
 	}
-	descriptors := make([]agentdock.ToolDescriptor, 0)
-	hasKnownProvider := false
-	for _, node := range nodes {
-		if !nodeUsesCurrentBridgeProtocol(node) {
-			continue
-		}
-		if !containsString(node.Capabilities, name) {
-			continue
-		}
-		hasKnownProvider = true
-		if !node.Enabled {
-			continue
-		}
-		nodeDescriptors, err := s.agentDock.ToolDescriptors(ctx, node.ID)
-		if err != nil {
-			return err
-		}
-		descriptor, ok := findToolDescriptor(nodeDescriptors, name)
-		if !ok {
-			return fmt.Errorf("AgentDock node %s does not provide tool descriptor %s", node.ID, name)
-		}
-		descriptors = append(descriptors, descriptor)
-	}
-	if len(descriptors) == 0 {
-		// 被禁用的节点仍属于 fleet；没有任何 provider 时才真正下架公开工具。
-		if hasKnownProvider {
-			return nil
-		}
-		s.mcpToolsMu.Lock()
-		defer s.mcpToolsMu.Unlock()
-		if _, exists := s.mcpTools[name]; !exists {
-			return nil
-		}
-		if err := s.agentDock.DeletePublishedToolContract(ctx, name); err != nil {
-			return err
-		}
-		if server := s.currentMCPServer(); server != nil {
-			server.RemoveTools(name)
-		}
-		delete(s.mcpTools, name)
-		return nil
-	}
-
-	descriptor, acceptedHashes, err := mergeFleetToolDescriptors(descriptors)
+	hash, err := toolContractHash(descriptor)
 	if err != nil {
-		if errors.Is(err, errUnsafeToolVisibility) {
-			// 保留旧 schema 可以拒绝不兼容调用，但保留旧 visibility 会扩大公开面，必须下架。
-			s.mcpToolsMu.Lock()
-			delete(s.mcpTools, name)
-			s.mcpToolsMu.Unlock()
-			if server := s.currentMCPServer(); server != nil {
-				server.RemoveTools(name)
-			}
-			return s.agentDock.DeletePublishedToolContract(ctx, name)
-		}
-		if errors.Is(err, errIncompatibleToolContract) {
-			return nil
-		}
-		return err
+		return errors.Join(err, s.retireNodeTool(ctx, name))
 	}
-	descriptor, err = sanitizeFleetToolDescriptor(descriptor)
-	if err != nil {
-		return err
-	}
-	contractHash, err := toolContractHash(descriptor)
-	if err != nil {
-		return err
-	}
-	candidate := publishedNodeTool{
-		Descriptor: descriptor, ContractHash: contractHash, AcceptedSemanticHashes: acceptedHashes,
-	}
-
+	candidate := publishedNodeTool{Descriptor: descriptor, ContractHash: hash, AcceptedSemanticHashes: hashes}
 	s.mcpToolsMu.Lock()
+	if s.mcpTools == nil {
+		s.mcpTools = make(map[string]publishedNodeTool)
+	}
 	published, exists := s.mcpTools[name]
-	descriptorChanged := !exists || !reflect.DeepEqual(published.Descriptor, candidate.Descriptor)
-	if exists && published.ContractHash == candidate.ContractHash &&
-		reflect.DeepEqual(published.AcceptedSemanticHashes, candidate.AcceptedSemanticHashes) && !descriptorChanged {
-		s.mcpToolsMu.Unlock()
-		return nil
-	}
-	if err := s.persistPublishedNodeTool(ctx, candidate); err != nil {
-		s.mcpToolsMu.Unlock()
-		return err
-	}
+	changed := !exists || !reflect.DeepEqual(published.Descriptor, candidate.Descriptor)
 	s.mcpTools[name] = candidate
-	if server := s.currentMCPServer(); server != nil && descriptorChanged {
+	if server := s.currentMCPServer(); server != nil && changed {
 		s.registerNodeMCPTool(server, candidate.Descriptor, s.mcpAppsEnabled())
 	}
 	s.mcpToolsMu.Unlock()
+	return s.persistPublishedNodeTool(ctx, candidate)
+}
+
+func (s *Server) retireNodeTool(ctx context.Context, name string) error {
+	s.mcpToolsMu.Lock()
+	delete(s.mcpTools, name)
+	s.mcpToolsMu.Unlock()
+	if server := s.currentMCPServer(); server != nil {
+		server.RemoveTools(name)
+	}
+	if s.agentDock != nil {
+		return s.agentDock.DeletePublishedToolContract(ctx, name)
+	}
 	return nil
 }
 
@@ -466,8 +379,7 @@ func mergeFleetToolDescriptors(descriptors []agentdock.ToolDescriptor) (agentdoc
 		}
 		acceptedHashes = append(acceptedHashes, hash)
 	}
-	// Fleet 合并模型可见输出，但 accepted hashes 始终来自原始节点契约。
-	// 这样裁剪已知展示元数据不会阻断滚动升级，也不会放宽入参或权限校验。
+	// 当前 release 的不同平台可有可选参数差异；输入校验仍由目标节点的完整契约执行。
 	merged.OutputSchema = mcpresult.Schema(merged.Name, merged.OutputSchema)
 	mergedExecution, _ := executionToolMeta(merged.Meta) // 上面的 hash 已校验每个 descriptor。
 	for _, descriptor := range descriptors[1:] {
@@ -501,10 +413,6 @@ func mergeFleetToolDescriptors(descriptors []agentdock.ToolDescriptor) (agentdoc
 		merged.Meta["ui"] = copyUI
 	}
 	merged.Annotations = mergeFleetToolAnnotations(descriptors)
-	merged, err = sanitizeFleetToolDescriptor(merged)
-	if err != nil {
-		return agentdock.ToolDescriptor{}, nil, err
-	}
 	return merged, normalizeToolContractHashes(acceptedHashes), nil
 }
 
@@ -852,94 +760,4 @@ func findToolDescriptor(descriptors []agentdock.ToolDescriptor, name string) (ag
 		}
 	}
 	return agentdock.ToolDescriptor{}, false
-}
-
-func (s *Server) nodeToolContractMismatch(ctx context.Context, node agentdock.Node, name string) (*toolContractMismatch, error) {
-	published, ok := s.publishedNodeTool(name)
-	if !ok {
-		return nil, fmt.Errorf("Nexus 公开工具契约不存在: %s", name)
-	}
-	descriptors, err := s.agentDock.ToolDescriptors(ctx, node.ID)
-	if err != nil {
-		return nil, err
-	}
-	target, ok := findToolDescriptor(descriptors, name)
-	if !ok {
-		return nil, fmt.Errorf("AgentDock node %s does not provide tool descriptor %s", node.ID, name)
-	}
-	nodeHash, err := toolContractHash(target)
-	if err != nil {
-		return nil, err
-	}
-	if containsToolContractHash(published.AcceptedSemanticHashes, nodeHash) {
-		return nil, nil
-	}
-
-	return &toolContractMismatch{
-		Code:          "TOOL_CONTRACT_MISMATCH",
-		Message:       "目标 AgentDock 的工具契约不在 Nexus 当前已发布的兼容集合中，请刷新 GPT 工具；若仍不一致，请检查相关设备的 AgentDock 版本或工具契约。",
-		Tool:          name,
-		NodeID:        node.ID,
-		NodeName:      node.Name,
-		NodeVersion:   node.Version,
-		PublishedHash: published.ContractHash,
-		NodeHash:      nodeHash,
-		Differences:   toolContractDifferences(published.Descriptor, target),
-	}, nil
-}
-
-func toolContractDifferences(published, node agentdock.ToolDescriptor) []toolContractDifference {
-	publishedValue, publishedOK := normalizedContractValue(published)
-	nodeValue, nodeOK := normalizedContractValue(node)
-	if !publishedOK || !nodeOK {
-		return nil
-	}
-	differences := make([]toolContractDifference, 0, maxToolContractDifferences)
-	collectToolContractDifferences("", publishedValue, nodeValue, &differences)
-	return differences
-}
-
-func normalizedContractValue(descriptor agentdock.ToolDescriptor) (map[string]any, bool) {
-	contract, err := comparableContract(descriptor)
-	if err != nil {
-		return nil, false
-	}
-	encoded, err := json.Marshal(contract)
-	if err != nil {
-		return nil, false
-	}
-	var value map[string]any
-	if json.Unmarshal(encoded, &value) != nil {
-		return nil, false
-	}
-	return value, true
-}
-
-func collectToolContractDifferences(path string, published, node any, differences *[]toolContractDifference) {
-	if len(*differences) >= maxToolContractDifferences || reflect.DeepEqual(published, node) {
-		return
-	}
-	publishedMap, publishedIsMap := published.(map[string]any)
-	nodeMap, nodeIsMap := node.(map[string]any)
-	if publishedIsMap && nodeIsMap {
-		keys := unionMapKeys(publishedMap, nodeMap)
-		for _, key := range keys {
-			nextPath := key
-			if path != "" {
-				nextPath = path + "." + key
-			}
-			publishedValue, publishedExists := publishedMap[key]
-			nodeValue, nodeExists := nodeMap[key]
-			if !publishedExists || !nodeExists {
-				*differences = append(*differences, toolContractDifference{Path: nextPath, Published: publishedValue, Node: nodeValue})
-			} else {
-				collectToolContractDifferences(nextPath, publishedValue, nodeValue, differences)
-			}
-			if len(*differences) >= maxToolContractDifferences {
-				return
-			}
-		}
-		return
-	}
-	*differences = append(*differences, toolContractDifference{Path: path, Published: published, Node: node})
 }

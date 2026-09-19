@@ -61,7 +61,7 @@ func TestBuiltinSnapshotReplacesFleetToolsAndNotifiesConnectedClient(t *testing.
 		for len(changes) > 0 {
 			<-changes
 		}
-		hello := &protocol.Hello{DeviceID: node.DeviceID, ProtocolVersion: protocol.ConnectionProtocolVersion, Tools: []protocol.ToolDescriptor{}, Capabilities: []string{}, UIResources: []protocol.UIResourceCapability{}}
+		hello := &protocol.Hello{DeviceID: node.DeviceID, Version: agentdock.RequiredVersion, ProtocolVersion: protocol.ConnectionProtocolVersion, Tools: []protocol.ToolDescriptor{}, Capabilities: []string{}, UIResources: []protocol.UIResourceCapability{}}
 		if enabled {
 			hello.Tools = []protocol.ToolDescriptor{descriptor}
 			hello.Capabilities = []string{descriptor.Name}

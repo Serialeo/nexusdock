@@ -30,25 +30,15 @@ func (s *Server) initializeMCPGateway() {
 	s.registerCentralTools()
 	if s.agentDockHub != nil {
 		s.agentDockHub.SetHelloHandler(s.handleAgentDockHello)
+		s.agentDockHub.SetDisconnectHandler(s.handleAgentDockDisconnect)
 	}
 	if s.agentDock != nil {
 		ctx := context.Background()
 		if err := s.resetPersistedNodeToolCatalog(ctx); err != nil && s.logger != nil {
 			s.logger.Warn("清理上一协议 generation 的 AgentDock 工具发布缓存失败", "error", err)
 		}
-		if nodes, err := s.agentDock.List(ctx); err == nil {
-			for _, node := range nodes {
-				if !nodeUsesCurrentBridgeProtocol(node) {
-					continue
-				}
-				descriptors, descriptorErr := s.agentDock.ToolDescriptors(ctx, node.ID)
-				if descriptorErr == nil {
-					s.registerNodeTools(node, agentdock.Hello{Tools: descriptors})
-				}
-			}
-		}
-		// 启动时也核对一次已发布目录，清理旧版本遗留但 fleet 已不再提供的 stale tool。
-		s.reconcileNodeToolContracts(s.publishedNodeToolNames())
+		// 数据库中的 Hello 只用于展示最后已知状态，不能重新发布工具。当前连接完成
+		// Bridge v4 Hello 后才进入本进程的 live catalog，避免重启时复活旧契约。
 	}
 	// Nexus 自有的 Context / Recall / Workflow Apps 不依赖任何 AgentDock 节点，启动时始终注册。
 	s.syncMCPAppResources()
@@ -159,6 +149,9 @@ func (s *Server) setMCPAppsEnabled(enabled bool) {
 		return
 	}
 
+	s.mcpReconcileMu.Lock()
+	defer s.mcpReconcileMu.Unlock()
+
 	// 关闭 Apps 时下架 app-only 工具；普通工具仅移除展示绑定，不改变持久化 descriptor。
 	s.registerCentralTools()
 	s.mcpToolsMu.RLock()
@@ -180,69 +173,13 @@ func unavailableAgentDockToolName(name string) bool {
 
 func (s *Server) registerNodeTools(node agentdock.Node, hello agentdock.Hello) {
 	defer s.syncMCPAppResources()
-	helloToolNames := make(map[string]struct{}, len(hello.Tools))
-	for _, descriptor := range hello.Tools {
-		if mcpcontract.IsCanonicalTool(descriptor.Name) || unavailableAgentDockToolName(descriptor.Name) || strings.TrimSpace(descriptor.Name) == "" {
-			continue
-		}
-		helloToolNames[descriptor.Name] = struct{}{}
-		if s.agentDock != nil {
-			// 持久化 Hello 是完整快照；先检查全部 provider，避免短暂公开冲突的可见性。
-			if err := s.reconcileFleetNodeTool(descriptor.Name); err != nil && s.logger != nil {
-				s.logger.Warn("检查 AgentDock 工具契约兼容性失败", "tool", descriptor.Name, "error", err)
-			}
-			continue
-		}
-		contractHash, err := toolContractHash(descriptor)
-		if err != nil {
-			if s.logger != nil {
-				s.logger.Warn("计算 AgentDock 工具契约失败", "node_id", node.ID, "tool", descriptor.Name, "error", err)
-			}
-			continue
-		}
-
-		name := descriptor.Name
-		candidate := publishedNodeTool{
-			Descriptor: descriptor, ContractHash: contractHash,
-			AcceptedSemanticHashes: []string{contractHash},
-		}
-		s.mcpToolsMu.Lock()
-		published, exists := s.mcpTools[name]
-		if !exists {
-			// 首次出现的契约先持久化再公开，确保 Nexus 重启后仍沿用同一个 schema。
-			if err := s.persistPublishedNodeTool(context.Background(), candidate); err != nil {
-				s.mcpToolsMu.Unlock()
-				if s.logger != nil {
-					s.logger.Warn("保存 AgentDock 公开工具契约失败", "node_id", node.ID, "tool", name, "error", err)
-				}
-				continue
-			}
-			s.mcpTools[name] = candidate
-			if server := s.currentMCPServer(); server != nil {
-				s.registerNodeMCPTool(server, descriptor, s.mcpAppsEnabled())
-			}
-		}
-		s.mcpToolsMu.Unlock()
-		if exists && (published.ContractHash != contractHash ||
-			!containsToolContractHash(published.AcceptedSemanticHashes, contractHash) ||
-			!jsonValuesEqual(published.Descriptor.Meta, descriptor.Meta) ||
-			!jsonValuesEqual(published.Descriptor.Annotations, descriptor.Annotations)) {
-			// schema 不同不等于不兼容；由 Fleet 合并器决定能否安全形成同一代公开契约。
-			if err := s.reconcileFleetNodeTool(name); err != nil && s.logger != nil {
-				s.logger.Warn("检查 AgentDock 工具契约兼容性失败", "tool", name, "error", err)
-			}
-		}
+	if !node.Enabled || !node.IsCurrent() || strings.TrimSpace(node.ID) == "" {
+		s.handleAgentDockDisconnect(node.ID)
+		return
 	}
-
-	// Hello 是当前节点完整能力快照。已公开但本次不再上报的工具也要重新核对，
-	// 这样最后一个 provider 真正移除能力时才会退休工具，而不是永久留下 stale schema。
-	missingPublished := make([]string, 0)
-	for _, name := range s.publishedNodeToolNames() {
-		if _, present := helloToolNames[name]; !present {
-			missingPublished = append(missingPublished, name)
-		}
-	}
-	s.reconcileNodeToolContracts(missingPublished)
+	impacted := s.replaceLiveNodeToolSnapshot(node.ID, hello.Tools)
+	impacted = append(impacted, s.publishedNodeToolNames()...)
+	s.reconcileNodeToolContracts(impacted)
 }
 
 func nodeMCPTool(descriptor agentdock.ToolDescriptor) *mcpsdk.Tool {
@@ -255,7 +192,7 @@ func nodeMCPToolWithApps(descriptor agentdock.ToolDescriptor, mcpAppsEnabled boo
 		return nil
 	}
 	tool := &mcpsdk.Tool{
-		Name: descriptor.Name, Title: descriptor.Title, Description: mcpresult.Description(descriptor.Name, descriptor.Description),
+		Name: descriptor.Name, Title: descriptor.Title, Description: mcpresult.Description(descriptor.Name, descriptor.Description) + " Route through work_session_id and target_id returned by project_open, node_open, or project_context.",
 		InputSchema: nodeInputSchema(descriptor.InputSchema), OutputSchema: nodeOutputSchema(descriptor.Name, descriptor.OutputSchema),
 	}
 	if len(descriptor.Annotations) > 0 {
@@ -352,6 +289,11 @@ func (s *Server) callNodeTool(ctx context.Context, name string, arguments map[st
 		}
 		return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorSessionTargetDenied}, err)
 	}
+	nodeID := target.Target.NodeID
+	node, err := s.currentAgentDockNode(ctx, nodeID)
+	if err != nil {
+		return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorSessionTargetDenied}, errors.New("Target is unavailable"))
+	}
 	historicalControl := allowsHistoricalTargetControl(name, arguments)
 	if !historicalControl {
 		if target.Target.Status != protocol.TargetReady && target.Target.Status != protocol.TargetIdle && target.Target.Status != protocol.TargetRunning {
@@ -373,38 +315,24 @@ func (s *Server) callNodeTool(ctx context.Context, name string, arguments map[st
 		}
 	}
 
-	nodeID := target.Target.NodeID
-	node, err := s.agentDock.Get(ctx, nodeID)
-	if err != nil {
-		return s.gatewayToolResult(name, nil, err)
-	}
 	if !historicalControl && target.Target.Permissions.FullAccess != node.FullAccess {
 		return s.gatewayToolResult(name, map[string]any{
 			"code": protocol.ErrorContextRefreshRequired, "target_id": targetID, "node_id": nodeID,
 		}, errors.New("Node Full Access changed; reopen or refresh the Project Target before executing"))
 	}
-	if !nodeUsesCurrentBridgeProtocol(node) {
-		details := map[string]any{"code": "BRIDGE_PROTOCOL_MISMATCH", "node_id": nodeID, "required_protocol": agentdock.ConnectionProtocolVersion}
-		return s.gatewayToolResult(name, details, errors.New("target AgentDock has not completed the current Bridge v4 handshake"))
-	}
 	if !containsString(node.Capabilities, name) {
 		return s.gatewayToolResult(name, nil, fmt.Errorf("AgentDock node %s does not provide tool %s", nodeID, name))
 	}
 
-	mismatch, err := s.nodeToolContractMismatch(ctx, node, name)
-	if err != nil {
-		return s.gatewayToolResult(name, nil, err)
-	}
-	if mismatch != nil {
-		details, encodeErr := asMap(mismatch)
-		if encodeErr != nil {
-			return nil, encodeErr
-		}
-		return s.gatewayToolResult(name, details, errors.New(mismatch.Message))
-	}
-
+	// The target's current descriptor is authoritative for invocation. A public
+	// tools/list generation may change while clients are connected; rejecting by
+	// its hash makes otherwise valid calls fail during reconnects. Exact target
+	// validation below preserves safety without coupling execution to old catalog state.
 	targetArguments, err := s.validateTargetNodeToolArguments(ctx, nodeID, name, arguments)
 	if err != nil {
+		if errors.Is(err, errTargetToolVisibilityUnavailable) {
+			return s.gatewayToolResult(name, map[string]any{"code": "TOOL_NOT_AVAILABLE", "target_id": targetID, "tool": name}, errTargetToolVisibilityUnavailable)
+		}
 		if errors.Is(err, errTargetToolArgumentsInvalid) {
 			details := map[string]any{"code": "TARGET_TOOL_ARGUMENT_INVALID", "target_id": targetID, "tool": name}
 			return s.gatewayToolResult(name, details, errTargetToolArgumentsInvalid)
@@ -454,6 +382,7 @@ func allowsHistoricalTargetControl(name string, arguments map[string]any) bool {
 }
 
 var errTargetToolArgumentsInvalid = errors.New("tool arguments do not match the target AgentDock input schema")
+var errTargetToolVisibilityUnavailable = errors.New("target AgentDock tool visibility is unavailable with current MCP Apps settings")
 
 func (s *Server) validateTargetNodeToolArguments(ctx context.Context, nodeID, name string, arguments map[string]any) (map[string]any, error) {
 	descriptors, err := s.agentDock.ToolDescriptors(ctx, nodeID)
@@ -463,6 +392,13 @@ func (s *Server) validateTargetNodeToolArguments(ctx context.Context, nodeID, na
 	descriptor, ok := findToolDescriptor(descriptors, name)
 	if !ok {
 		return nil, fmt.Errorf("target AgentDock tool contract is missing: %s", name)
+	}
+	visibility, err := normalizedToolVisibility(descriptor.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("read target AgentDock tool visibility: %w", err)
+	}
+	if !s.mcpAppsEnabled() && !containsString(visibility, "model") {
+		return nil, errTargetToolVisibilityUnavailable
 	}
 	encodedSchema, err := json.Marshal(descriptor.InputSchema)
 	if err != nil {
@@ -494,10 +430,6 @@ func (s *Server) validateTargetNodeToolArguments(ctx context.Context, nodeID, na
 		return nil, errTargetToolArgumentsInvalid
 	}
 	return targetArguments, nil
-}
-
-func nodeUsesCurrentBridgeProtocol(node agentdock.Node) bool {
-	return strings.TrimSpace(node.ProtocolVersion) == agentdock.ConnectionProtocolVersion
 }
 
 func containsString(values []string, target string) bool {
