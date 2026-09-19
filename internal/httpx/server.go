@@ -44,6 +44,17 @@ type trackedResponseWriter struct {
 	wroteHeader bool
 }
 
+type operationLockKey struct {
+	scope     string
+	primary   string
+	secondary string
+}
+
+type operationLock struct {
+	gate chan struct{}
+	refs int
+}
+
 func (w *trackedResponseWriter) WriteHeader(statusCode int) {
 	if w.wroteHeader {
 		return
@@ -95,6 +106,7 @@ type Server struct {
 	embedding            *recall.EmbeddingService
 	settings             *settings.Store
 	mcpSettings          *settings.MCPStore
+	checkpointSettings   *settings.CheckpointStore
 	mcpToken             *auth.MCPTokenStore
 	stage3Wake           chan struct{}
 	aiApplyMu            sync.Mutex
@@ -102,6 +114,8 @@ type Server struct {
 	mcpServer            *mcpsdk.Server
 	mcpHandler           http.Handler
 	mcpReconcileMu       sync.Mutex
+	operationMu          sync.Mutex
+	operationLocks       map[operationLockKey]*operationLock
 	mcpToolsMu           sync.RWMutex
 	mcpTools             map[string]publishedNodeTool
 	mcpResourcesMu       sync.RWMutex
@@ -109,6 +123,40 @@ type Server struct {
 	artifactSecretMu     sync.Mutex
 	artifactDownloadsMu  sync.Mutex
 	artifactDownloads    map[string]int
+}
+
+func (s *Server) acquireOperation(ctx context.Context, key operationLockKey) (func(), error) {
+	s.operationMu.Lock()
+	if s.operationLocks == nil {
+		s.operationLocks = make(map[operationLockKey]*operationLock)
+	}
+	lock := s.operationLocks[key]
+	if lock == nil {
+		lock = &operationLock{gate: make(chan struct{}, 1)}
+		s.operationLocks[key] = lock
+	}
+	lock.refs++
+	s.operationMu.Unlock()
+
+	select {
+	case lock.gate <- struct{}{}:
+		return func() {
+			<-lock.gate
+			s.releaseOperation(key, lock)
+		}, nil
+	case <-ctx.Done():
+		s.releaseOperation(key, lock)
+		return nil, ctx.Err()
+	}
+}
+
+func (s *Server) releaseOperation(key operationLockKey, lock *operationLock) {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	lock.refs--
+	if lock.refs == 0 && s.operationLocks[key] == lock {
+		delete(s.operationLocks, key)
+	}
 }
 
 type ServerOption func(*Server)
@@ -142,6 +190,10 @@ func WithRuntimeSettings(store *settings.Store) ServerOption {
 
 func WithMCPSettings(store *settings.MCPStore) ServerOption {
 	return func(server *Server) { server.mcpSettings = store }
+}
+
+func WithCheckpointSettings(store *settings.CheckpointStore) ServerOption {
+	return func(server *Server) { server.checkpointSettings = store }
 }
 
 func WithPrivateNotes(store *privatenotes.Store) ServerOption {
@@ -189,6 +241,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/settings/ai", protected(s.getRuntimeAISettings))
 	mux.HandleFunc("GET /v1/settings/mcp", protected(s.getMCPSettings))
 	mux.HandleFunc("PUT /v1/settings/mcp", protected(s.updateMCPSettings))
+	mux.HandleFunc("GET /v1/settings/checkpoint", deviceProtected(s.getCheckpointPrompt))
+	mux.HandleFunc("PUT /v1/settings/checkpoint", protected(s.updateCheckpointPrompt))
 	mux.HandleFunc("GET /v1/settings/mcp-token", protected(s.getMCPAccessToken))
 	mux.HandleFunc("POST /v1/settings/mcp-token/reset", protected(s.resetMCPAccessToken))
 	mux.HandleFunc("PUT /v1/settings/ai", protected(s.updateRuntimeAISettings))

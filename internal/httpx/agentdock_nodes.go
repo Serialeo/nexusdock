@@ -17,6 +17,8 @@ func (s *Server) registerAgentDockNodeRoutes(mux *http.ServeMux, protected func(
 	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}", protected(s.agentDockNodeGet))
 	mux.HandleFunc("PATCH /v1/runtime/nodes/{nodeID}", protected(s.agentDockNodeUpdate))
 	mux.HandleFunc("DELETE /v1/runtime/nodes/{nodeID}", protected(s.agentDockNodeDelete))
+	mux.HandleFunc("GET /v1/runtime/nodes/{nodeID}/session", protected(s.agentDockNodeSessionGet))
+	mux.HandleFunc("PUT /v1/runtime/nodes/{nodeID}/session", protected(s.agentDockNodeSessionUpdate))
 
 	// 配对码和 Device Token 是这两个入口各自的身份边界，不能套用浏览器会话认证。
 	mux.HandleFunc("POST /v1/nodes/pair", s.agentDockNodePair)
@@ -191,6 +193,40 @@ func (s *Server) agentDockNodeDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("nodeID")
 	descriptors, descriptorErr := s.agentDock.ToolDescriptors(r.Context(), id)
+	if s.projects != nil {
+		deployments, err := s.projects.ListDeploymentsForNode(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "AGENTDOCK_NODE_OPERATION_FAILED", "无法检查 AgentDock 节点的 Deployments")
+			return
+		}
+		for _, deployment := range deployments {
+			project, projectErr := s.projects.GetProject(r.Context(), deployment.ProjectID)
+			if projectErr != nil {
+				writeProjectError(w, projectErr)
+				return
+			}
+			if project.Kind == projectstore.ProjectKindUser {
+				writeError(w, http.StatusConflict, "AGENTDOCK_NODE_HAS_DEPLOYMENTS", "请先删除该节点关联的 Project Deployment")
+				return
+			}
+		}
+		if session, err := s.projects.GetNodeSession(r.Context(), id); err == nil {
+			revoked, revokeErr := s.projects.RevokeTargetsForProject(r.Context(), session.Project.ID, "AgentDock Node deleted")
+			if revokeErr != nil {
+				writeError(w, http.StatusInternalServerError, "NODE_SESSION_TARGET_REVOKE_FAILED", revokeErr.Error())
+				return
+			}
+			s.revokeProjectTargetsOnNodes(r.Context(), revoked)
+			s.tryRemoveProjectDeployment(r.Context(), session.Deployment)
+			if err := s.projects.DeleteNodeSession(r.Context(), id); err != nil {
+				writeError(w, http.StatusInternalServerError, "NODE_SESSION_DELETE_FAILED", err.Error())
+				return
+			}
+		} else if !errors.Is(err, projectstore.ErrNodeSessionNotFound) {
+			writeError(w, http.StatusInternalServerError, "NODE_SESSION_READ_FAILED", err.Error())
+			return
+		}
+	}
 	if s.agentDockHub != nil {
 		s.agentDockHub.Disconnect(id)
 	}

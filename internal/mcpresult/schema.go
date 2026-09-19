@@ -74,7 +74,7 @@ func Schema(name string, input map[string]any) map[string]any {
 			dropProperty(project, "revision")
 			dropProperty(project, "enabled")
 		}
-	case "project_open", "project_context":
+	case "project_open", "node_open", "project_context":
 		dropProperty(out, "context_revision")
 		dropProperty(out, "delivery")
 		if project := objectSchema(out, "project"); project != nil {

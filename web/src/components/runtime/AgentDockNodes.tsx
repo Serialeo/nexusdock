@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { CirclePlus, Pencil, RefreshCw, Server, Trash2 } from 'lucide-react';
 import { api } from '../../api/client';
 import Dialog from '../Dialog';
@@ -28,6 +28,23 @@ export type AgentDockNode = {
 type NodeListResponse = { ok: boolean; nodes: AgentDockNode[]; count: number };
 type NodeResponse = { ok: boolean; node: AgentDockNode };
 type PairingResponse = { ok: boolean; pairing: { code: string; expires_at: string } };
+type FileCapability = 'none' | 'read_only' | 'read_write';
+type NodeSessionConfiguration = {
+  configured: boolean;
+  enabled: boolean;
+  permissions: { files: FileCapability; shell: boolean; browser: boolean; dynamic_mcp: boolean; acp: boolean; full_access?: boolean };
+  desired_revision?: string;
+  applied_revision?: string;
+  apply_status?: string;
+  last_error?: string;
+};
+type NodeSessionResponse = { ok: boolean; session: NodeSessionConfiguration };
+
+const emptyNodeSession = (): NodeSessionConfiguration => ({
+  configured: false,
+  enabled: false,
+  permissions: { files: 'none', shell: false, browser: false, dynamic_mcp: false, acp: false },
+});
 
 export function useAgentDockNodes(refreshToken: number) {
   const [nodes, setNodes] = useState<AgentDockNode[]>([]);
@@ -103,6 +120,11 @@ export function AgentDockNodesPanel({ nodes, selectedNodeID, loading, error, onR
   const [editName, setEditName] = useState('');
   const [editEnabled, setEditEnabled] = useState(true);
   const [editFullAccess, setEditFullAccess] = useState(false);
+  const [editNodeSession, setEditNodeSession] = useState<NodeSessionConfiguration>(emptyNodeSession);
+  const [originalNodeSession, setOriginalNodeSession] = useState<NodeSessionConfiguration>(emptyNodeSession);
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const [sessionLoadError, setSessionLoadError] = useState('');
+  const sessionRequestID = useRef(0);
   const [deleting, setDeleting] = useState<AgentDockNode | null>(null);
   const [pairing, setPairing] = useState<PairingResponse['pairing'] | null>(null);
   const [busy, setBusy] = useState('');
@@ -121,11 +143,27 @@ export function AgentDockNodesPanel({ nodes, selectedNodeID, loading, error, onR
     }
   }
 
-  function openEdit(node: AgentDockNode) {
+  async function openEdit(node: AgentDockNode) {
+    const requestID = ++sessionRequestID.current;
     setEditing(node);
     setEditName(node.name);
     setEditEnabled(node.enabled);
     setEditFullAccess(node.full_access);
+    setEditNodeSession(emptyNodeSession());
+    setOriginalNodeSession(emptyNodeSession());
+    setSessionLoadError('');
+    setSessionLoading(true);
+    try {
+      const result = await api<NodeSessionResponse>(`/v1/runtime/nodes/${encodeURIComponent(node.id)}/session`);
+      if (requestID !== sessionRequestID.current) return;
+      setEditNodeSession(result.session);
+      setOriginalNodeSession(result.session);
+    } catch (cause) {
+      if (requestID !== sessionRequestID.current) return;
+      setSessionLoadError(cause instanceof Error ? cause.message : '无法读取临时会话配置');
+    } finally {
+      if (requestID === sessionRequestID.current) setSessionLoading(false);
+    }
   }
 
   async function submitEdit(event: FormEvent) {
@@ -136,6 +174,14 @@ export function AgentDockNodesPanel({ nodes, selectedNodeID, loading, error, onR
       const result = await api<NodeResponse>(`/v1/runtime/nodes/${encodeURIComponent(editing.id)}`, {
         method: 'PATCH', body: JSON.stringify({ name: editName.trim(), enabled: editEnabled, full_access: editFullAccess }),
       });
+      const sessionChanged = JSON.stringify(editNodeSession) !== JSON.stringify(originalNodeSession);
+      if (sessionChanged) {
+        const { files, shell, browser, dynamic_mcp, acp } = editNodeSession.permissions;
+        await api<NodeSessionResponse>(`/v1/runtime/nodes/${encodeURIComponent(editing.id)}/session`, {
+          method: 'PUT',
+          body: JSON.stringify({ enabled: editNodeSession.enabled, permissions: { files, shell, browser, dynamic_mcp, acp } }),
+        });
+      }
       setEditing(null);
       onReload();
       setNotice({ tone: 'success', text: `已更新 ${result.node.name}` });
@@ -186,7 +232,7 @@ export function AgentDockNodesPanel({ nodes, selectedNodeID, loading, error, onR
         </div>
         <div className="agentdock-node-row-actions">
  <button type="button" className="nx-button is-secondary is-small" onClick={() => setCapabilityNode(node)}>内置能力</button>
-          <button type="button" className="nx-button is-secondary is-small" disabled={!!busy} onClick={() => openEdit(node)}><Pencil size={14} />编辑</button>
+          <button type="button" className="nx-button is-secondary is-small" disabled={!!busy} onClick={() => void openEdit(node)}><Pencil size={14} />编辑</button>
           <button type="button" className="nx-button is-danger is-small" disabled={!!busy} onClick={() => setDeleting(node)}><Trash2 size={14} />删除</button>
         </div>
       </article>)}
@@ -202,11 +248,25 @@ export function AgentDockNodesPanel({ nodes, selectedNodeID, loading, error, onR
 
     {editing && <Dialog title={`编辑 ${editing.name}`} description="Full Access 是 Node 级 Project 执行权限，与 Project Folder 独立；Folder 只决定默认 cwd 与 AGENTS.md 搜索边界。" onClose={() => setEditing(null)}>
       <form className="agentdock-node-form" onSubmit={submitEdit}>
+        {sessionLoadError && <div className="nx-alert is-error">{sessionLoadError}</div>}
         <label className="is-wide"><span>显示名称</span><input required maxLength={100} value={editName} onChange={(event) => setEditName(event.target.value)} /></label>
         <label className="agentdock-node-check"><input type="checkbox" checked={editFullAccess} onChange={(event) => setEditFullAccess(event.target.checked)} /><span>Full Access</span></label>
         <p className="empty-mini">开启后，该 Node 上的 Project Target 可使用节点已暴露的全部执行能力；不会因为 Project 选择了某个文件夹而限制在该目录内。关闭后继续按各 Deployment 的细粒度权限执行。</p>
+        <fieldset className="deployment-permission-fieldset" disabled={sessionLoading || !!sessionLoadError}>
+          <legend>临时会话</legend>
+          <label className="deployment-enabled"><input type="checkbox" checked={editNodeSession.enabled} onChange={(event) => setEditNodeSession((value) => ({ ...value, enabled: event.target.checked }))} /><span>允许 MCP Host 通过 node_open 创建节点临时会话</span></label>
+          <p className="empty-mini">临时会话不属于任何用户 Project，使用 AgentDock 默认 cwd，不自动发现 AGENTS.md；实际访问仍受节点 OS 身份约束。</p>
+          <label><span>Files</span><select value={editNodeSession.permissions.files} onChange={(event) => setEditNodeSession((value) => ({ ...value, permissions: { ...value.permissions, files: event.target.value as FileCapability } }))}><option value="none">禁用</option><option value="read_only">只读</option><option value="read_write">读写（含删除/移动）</option></select></label>
+          <div className="deployment-toggle-grid">
+            <label><input type="checkbox" checked={editNodeSession.permissions.shell} onChange={(event) => setEditNodeSession((value) => ({ ...value, permissions: { ...value.permissions, shell: event.target.checked } }))} /><span>Shell / Git via shell</span></label>
+            <label><input type="checkbox" checked={editNodeSession.permissions.browser} onChange={(event) => setEditNodeSession((value) => ({ ...value, permissions: { ...value.permissions, browser: event.target.checked } }))} /><span>Browser</span></label>
+            <label><input type="checkbox" checked={editNodeSession.permissions.dynamic_mcp} onChange={(event) => setEditNodeSession((value) => ({ ...value, permissions: { ...value.permissions, dynamic_mcp: event.target.checked } }))} /><span>Dynamic MCP</span></label>
+            <label><input type="checkbox" checked={editNodeSession.permissions.acp} onChange={(event) => setEditNodeSession((value) => ({ ...value, permissions: { ...value.permissions, acp: event.target.checked } }))} /><span>ACP</span></label>
+          </div>
+          {editFullAccess && <p className="empty-mini">当前 Full Access 会覆盖这些细粒度权限，但不会启用临时会话，也不会改变其零 Project Prompt 边界。</p>}
+        </fieldset>
         <label className="agentdock-node-check"><input type="checkbox" checked={editEnabled} onChange={(event) => setEditEnabled(event.target.checked)} /><span>启用节点</span></label>
-        <footer><button type="button" className="nx-button is-secondary" onClick={() => setEditing(null)}>取消</button><button type="submit" className="nx-button" disabled={busy === 'save'}>{busy === 'save' ? '保存中…' : '保存'}</button></footer>
+        <footer><button type="button" className="nx-button is-secondary" onClick={() => setEditing(null)}>取消</button><button type="submit" className="nx-button" disabled={busy === 'save' || sessionLoading || !!sessionLoadError}>{busy === 'save' ? '保存中…' : sessionLoading ? '读取中…' : '保存'}</button></footer>
       </form>
     </Dialog>}
 

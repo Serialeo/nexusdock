@@ -18,7 +18,7 @@ def build_mcp_result_contract() -> dict[str, Any]:
             {"tool": "read_file", "input": {"path": "a.txt", "content": "data", "encoding": "utf-8", "size_bytes": 4, "truncated": False}, "output": {"path": "a.txt", "content": "data"}},
             {"tool": "list_dir", "input": {"path": ".", "entries": [{"path": "a", "name": "a", "type": "file", "size_bytes": 4, "is_hidden": False, "modified": "date"}], "truncated": False, "partial": False, "skipped_paths": []}, "output": {"path": ".", "entries": [{"path": "a", "type": "file"}]}},
             {"tool": "search_text", "input": {"query": "x", "engine": "rg", "matches": [], "total_matches": 0, "truncated": False}, "output": {"matches": []}},
-            {"tool": "task_manage", "input": {"action": "list", "tasks": [], "count": 0, "state_dir": "private", "checkpoint_policy": {"rules": ["static"]}}, "output": {"tasks": []}},
+            {"tool": "task_manage", "input": {"action": "list", "tasks": [], "count": 0, "state_dir": "private", "checkpoint_policy": {"rules": ["static"]}}, "output": {"tasks": [], "checkpoint_policy": {"rules": ["static"]}}},
             {"tool": "acp_prompt", "input": {"action": "events", "status": "running", "events": [], "next_seq": 0, "first_seq": 1, "latest_seq": 0, "dropped_count": 0, "truncated": False, "has_more": False, "error_code": "", "message": "", "started_at": "date"}, "output": {"status": "running", "events": [], "next_seq": 0}},
             {"tool": "workflow_template_manage", "input": {"count": 900, "vector_index_status": "ready"}, "output": {"count": 900, "vector_index_status": "ready"}},
         ],
@@ -599,6 +599,32 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         },
         ("ok", "token"),
     )
+    schemas["CheckpointPromptView"] = obj(
+        "任务系统 checkpoint 提示词设置；独立于项目 AGENTS.md。",
+        {
+            "prompt": scalar("string", "当前生效的 checkpoint 提示词；按 UTF-8 bytes 限制为 8 KiB。", maxLength=8192, **{"x-maxBytes": 8192}),
+            "default_prompt": scalar("string", "随程序提供的默认 checkpoint 提示词。"),
+            "source": enum("提示词来源。", ["bundled_default", "custom"]),
+            "revision": scalar("string", "编辑版本，用于防止覆盖其他管理员的更新。"),
+            "updated_at": scalar("string", "最近保存时间。", format="date-time"),
+            "max_bytes": scalar("integer", "提示词最大 UTF-8 字节数。", const=8192),
+        },
+        ("prompt", "default_prompt", "source", "revision", "max_bytes"),
+    )
+    schemas["CheckpointPromptResponse"] = obj(
+        "Checkpoint 提示词读取或保存结果。",
+        {"ok": scalar("boolean", "请求是否成功。"), "settings": ref("CheckpointPromptView")},
+        ("ok", "settings"),
+    )
+    schemas["CheckpointPromptUpdateRequest"] = obj(
+        "更新 checkpoint 提示词；reset 恢复默认且保留递增编辑版本。",
+        {
+            "expected_revision": scalar("string", "读取时的编辑版本，必须提供。", minLength=1),
+            "action": enum("替换提示词或恢复默认。", ["replace", "reset"]),
+            "prompt": scalar("string", "replace 必填的完整提示词；reset 不接受该字段。", minLength=1, maxLength=8192, **{"x-maxBytes": 8192}),
+        },
+        ("expected_revision", "action"),
+    )
     schemas["MCPSettingsResponse"] = obj(
         "Nexus MCP 接入设置。管理员接口会同时返回固定访问 Token 与 Apps UI 开关状态。",
         {
@@ -1043,6 +1069,41 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         },
         ("full_access", "files", "shell", "browser", "dynamic_mcp", "acp"),
     )
+    schemas["NodeSessionPermissions"] = obj(
+        "节点临时会话的显式细粒度权限；Full Access 仍由 Node 设置独立覆盖。",
+        {
+            "files": enum("内置文件能力。", ["none", "read_only", "read_write"]),
+            "shell": scalar("boolean", "是否允许新命令执行。"),
+            "browser": scalar("boolean", "是否允许 Browser 能力。"),
+            "dynamic_mcp": scalar("boolean", "是否允许动态 MCP 能力。"),
+            "acp": scalar("boolean", "是否允许 ACP 能力。"),
+        },
+        ("files", "shell", "browser", "dynamic_mcp", "acp"),
+    )
+    schemas["NodeSessionConfiguration"] = obj(
+        "一个 Node 的临时会话开关、细粒度权限与 Deployment 收敛状态。",
+        {
+            "configured": scalar("boolean", "是否已在设置中写入临时会话配置。"),
+            "enabled": scalar("boolean", "是否允许 node_open。"),
+            "permissions": ref("DeploymentPermissions"),
+            "deployment_id": scalar("string", "内部系统 Deployment ID。"),
+            "desired_revision": scalar("string", "期望配置 revision。"),
+            "applied_revision": scalar("string", "Node 已应用 revision。"),
+            "apply_status": enum("Deployment 应用状态。", ["draft", "pending", "applied", "failed", "disabled"]),
+            "last_error": scalar("string", "最近一次应用错误。"),
+        },
+        ("configured", "enabled", "permissions"),
+    )
+    schemas["NodeSessionConfigurationResponse"] = obj(
+        "节点临时会话设置响应。",
+        {"ok": scalar("boolean", "请求是否成功。"), "session": ref("NodeSessionConfiguration")},
+        ("ok", "session"),
+    )
+    schemas["NodeSessionConfigurationUpdateRequest"] = obj(
+        "显式启停节点临时会话并设置其权限。",
+        {"enabled": scalar("boolean", "是否允许 node_open。"), "permissions": ref("NodeSessionPermissions")},
+        ("enabled", "permissions"),
+    )
     schemas["Project"] = obj(
         "Nexus Project desired state。Project ID 稳定，不随重命名变化。",
         {
@@ -1319,6 +1380,29 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         },
         ("ok", "project_id", "session", "targets"),
     )
+    schemas["NodeWorkSession"] = obj(
+        "管理员控制台可观察的节点临时 WorkSession 摘要。",
+        {
+            "work_session_id": scalar("string", "用于读取详情的 WorkSession ID。"),
+            "node_id": scalar("string", "临时会话绑定的 Node ID。"),
+            "node_name": scalar("string", "Node 当前显示名称。"),
+            "status": enum("WorkSession 状态。", ["preparing", "ready", "running", "completed", "partial", "failed", "cancelled"]),
+            "created_at": TIMESTAMP,
+            "updated_at": TIMESTAMP,
+            "delivery": ref("ProjectContextDeliveryEvidence"),
+        },
+        ("work_session_id", "node_id", "status", "created_at", "updated_at"),
+    )
+    schemas["NodeWorkSessionListResponse"] = obj(
+        "节点临时 WorkSession 只读列表。",
+        {"ok": scalar("boolean", "请求是否成功。"), "sessions": array("节点临时会话。", ref("NodeWorkSession")), "count": scalar("integer", "会话数量。", minimum=0)},
+        ("ok", "sessions", "count"),
+    )
+    schemas["NodeWorkSessionDetailResponse"] = obj(
+        "节点临时 WorkSession 与唯一 Target 的只读详情。",
+        {"ok": scalar("boolean", "请求是否成功。"), "session": ref("NodeWorkSession"), "targets": array("该会话的 Target。", ref("ProjectWorkTarget"))},
+        ("ok", "session", "targets"),
+    )
     schemas["AgentDockNodeListResponse"] = obj(
         "AgentDock 节点列表。",
         {
@@ -1426,6 +1510,10 @@ def build_openapi(schemas: dict[str, Any]) -> dict[str, Any]:
                 request=body(ref("RuntimeAISettingsUpdateRequest")),
                 success=ok(ref("RuntimeAISettingsResponse")),
             ),
+        },
+        "/v1/settings/checkpoint": {
+            "get": operation("getCheckpointPrompt", "读取 checkpoint 提示词；已配对设备可只读获取", success=ok(ref("CheckpointPromptResponse"))),
+            "put": operation("updateCheckpointPrompt", "管理员保存 checkpoint 提示词或恢复默认", request=body(ref("CheckpointPromptUpdateRequest")), success=ok(ref("CheckpointPromptResponse"))),
         },
         "/v1/settings/mcp": {
             "get": operation("getMCPSettings", "读取 Nexus MCP 接入设置", success=ok(ref("MCPSettingsResponse"))),
@@ -1763,6 +1851,22 @@ def build_openapi(schemas: dict[str, Any]) -> dict[str, Any]:
                 success=ok(ref("ProjectWorkSessionDetailResponse")),
             ),
         },
+        "/v1/sessions/node": {
+            "get": operation(
+                "listNodeWorkSessions",
+                "只读列出不属于用户 Project 的节点临时 WorkSessions",
+                params=[q("limit", "最大 WorkSession 数量。", "integer", minimum=1, maximum=500)],
+                success=ok(ref("NodeWorkSessionListResponse")),
+            ),
+        },
+        "/v1/sessions/node/{workSessionID}": {
+            "get": operation(
+                "getNodeWorkSession",
+                "只读读取节点临时 WorkSession 与唯一 Target",
+                params=[p("WorkSessionId")],
+                success=ok(ref("NodeWorkSessionDetailResponse")),
+            ),
+        },
         "/v1/runtime/nodes": {
             "get": operation("listAgentDockNodes", "列出 Nexus 管理的 AgentDock 节点", success=ok(ref("AgentDockNodeListResponse"))),
         },
@@ -1773,6 +1877,10 @@ def build_openapi(schemas: dict[str, Any]) -> dict[str, Any]:
             "get": operation("getAgentDockNode", "读取 AgentDock 节点", params=[p("RuntimeNodeId")], success=ok(ref("AgentDockNodeResponse"))),
             "patch": operation("updateAgentDockNode", "更新 AgentDock 节点", params=[p("RuntimeNodeId")], request=body(ref("AgentDockNodeUpdateRequest")), success=ok(ref("AgentDockNodeResponse"))),
             "delete": operation("deleteAgentDockNode", "删除 AgentDock 节点并撤销 Device Token", params=[p("RuntimeNodeId")]),
+        },
+        "/v1/runtime/nodes/{nodeID}/session": {
+            "get": operation("getNodeSessionConfiguration", "读取节点临时会话开关与权限", params=[p("RuntimeNodeId")], success=ok(ref("NodeSessionConfigurationResponse"))),
+            "put": operation("updateNodeSessionConfiguration", "保存节点临时会话开关与权限并撤销旧 Target", params=[p("RuntimeNodeId")], request=body(ref("NodeSessionConfigurationUpdateRequest")), success=ok(ref("NodeSessionConfigurationResponse"))),
         },
         "/v1/runtime/nodes/{nodeID}/overview": {"get": operation("getRuntimeOverview", "读取指定 AgentDock 节点的 Runtime 概览", params=[p("RuntimeNodeId")])},
         "/v1/runtime/nodes/{nodeID}/files": {

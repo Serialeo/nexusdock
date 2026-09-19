@@ -70,7 +70,7 @@ func Build(name string, value any, failed bool) (*mcpsdk.CallToolResult, error) 
 			return nil, err
 		}
 	}
-	if name == "project_open" || name == "project_context" {
+	if name == "project_open" || name == "node_open" || name == "project_context" {
 		revision, _ := payload["context_revision"].(string)
 		identity := map[string]any{"work_session_id": payload["work_session_id"]}
 		if target, ok := payload["target"].(map[string]any); ok {
@@ -191,9 +191,9 @@ func Summary(name string, payload map[string]any, failed bool) string {
 	return string(runes)
 }
 
-// 固定规则放在工具定义中只交付一次，而不是每个 checkpoint/get/resume 回包重复。
+// checkpoint 指导由任务服务交付；工具描述只保留调用入口，不复制可配置的提示词。
 func Description(name, description string) string {
-	const orientation = " Save a checkpoint at recoverable milestones, during long steps, and before handoff. Include work, evidence, blockers and next action. Summary-only checkpoints need task_id and summary. Read saved state before continuing; resume blocked tasks, complete all steps, and pass final_review before complete. Checkpoints are caller-driven, not scheduled."
+	const orientation = " Read checkpoint_policy returned by task create/get/resume before saving progress. A checkpoint requires task_id and summary; omit step fields and status for summary-only progress. The checkpoint prompt does not change task state or required parameter constraints."
 	if name == "task_manage" && !strings.Contains(description, orientation) {
 		description += orientation
 	}
@@ -234,7 +234,7 @@ func knownTool(name string) bool {
 		return true
 	}
 	switch name {
-	case "file_edit", "list_dir", "exec_command", "session_observe", "session_act", "mcp_tool_call", "mcp_tool_inspect", "view_image", "browser_session", "browser_act", "browser_snapshot", "agentdock_context", "project_open", "project_context", "evolve":
+	case "file_edit", "list_dir", "exec_command", "session_observe", "session_act", "mcp_tool_call", "mcp_tool_inspect", "view_image", "browser_session", "browser_act", "browser_snapshot", "agentdock_context", "project_open", "node_open", "project_context", "evolve":
 		return true
 	}
 	return false

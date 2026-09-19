@@ -1,0 +1,16 @@
+.checkpoint-prompt-panel { margin-top: 14px; overflow: hidden; border: 1px solid var(--nx-line); border-radius: 7px; background: #fff; }
+.checkpoint-prompt-panel > header { padding: 15px 17px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--nx-line); }
+.checkpoint-prompt-panel > header h3 { margin: 0; font-size: 14px; }
+.checkpoint-prompt-panel > header p { margin: 3px 0 0; color: var(--nx-muted); font-size: 11px; line-height: 1.45; }
+.checkpoint-prompt-source { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--nx-line); border-radius: 999px; background: var(--nx-soft); color: var(--nx-muted); font-size: 10px; }
+.checkpoint-prompt-source.is-custom { border-color: var(--nx-success-line); background: var(--nx-success-bg); color: var(--nx-success); }
+.checkpoint-prompt-error, .checkpoint-prompt-notice { margin: 12px 14px 0; display: flex; align-items: center; gap: 8px; }
+.checkpoint-prompt-error .nx-button, .checkpoint-prompt-notice .nx-button { margin-left: auto; }
+.checkpoint-prompt-body { padding: 16px; }
+.checkpoint-prompt-body fieldset { padding: 0; border: 0; }
+.checkpoint-prompt-field { display: grid; gap: 7px; color: #555; font-size: 11px; }
+.checkpoint-prompt-field textarea { width: 100%; min-height: 210px; padding: 11px 12px; resize: vertical; border: 1px solid #cfcfcf; border-radius: 5px; background: #fff; color: var(--nx-text); outline: 0; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.checkpoint-prompt-field textarea:focus { border-color: #777; }
+.checkpoint-prompt-meta { display: flex; justify-content: space-between; gap: 12px; margin-top: 7px; color: var(--nx-muted); font-size: 10px; }
+.checkpoint-prompt-validation { margin: 7px 0 0; color: var(--nx-danger); font-size: 10px; }
+.checkpoint-prompt-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }

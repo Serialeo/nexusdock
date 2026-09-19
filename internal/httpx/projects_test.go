@@ -129,6 +129,134 @@ func TestProjectAdminAPIAuthStrictJSONCASAndOfflineDesiredState(t *testing.T) {
 	}
 }
 
+func TestNodeSessionSettingsAreExplicitAndHiddenFromProjects(t *testing.T) {
+	_, handler, projects, nodes, db := newProjectsHTTPTestServer(t)
+	node := pairProjectHTTPTestNode(t, nodes, "device_node_session_settings_12345678", "SettingsNode")
+
+	initial := projectAPIRequest(t, handler, http.MethodGet, "/v1/runtime/nodes/"+node.ID+"/session", "")
+	if initial.Code != http.StatusOK || !strings.Contains(initial.Body.String(), `"configured":false`) || !strings.Contains(initial.Body.String(), `"files":"none"`) {
+		t.Fatalf("initial node session status=%d body=%s", initial.Code, initial.Body.String())
+	}
+	var internalProjects int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM projects WHERE kind='node'`).Scan(&internalProjects); err != nil || internalProjects != 0 {
+		t.Fatalf("GET created node session container: count=%d err=%v", internalProjects, err)
+	}
+
+	updated := projectAPIRequest(t, handler, http.MethodPut, "/v1/runtime/nodes/"+node.ID+"/session", `{"enabled":true,"permissions":{"files":"read_only","shell":true,"browser":false,"dynamic_mcp":false,"acp":false}}`)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"configured":true`) || !strings.Contains(updated.Body.String(), `"enabled":true`) {
+		t.Fatalf("update node session status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	configured, err := projects.GetNodeSession(t.Context(), node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.Deployment.WorkingFolder != "" || configured.Deployment.Permissions.Files != protocol.FileCapabilityReadOnly || !configured.Deployment.Permissions.Shell {
+		t.Fatalf("stored node session = %#v", configured)
+	}
+	list := projectAPIRequest(t, handler, http.MethodGet, "/v1/projects", "")
+	if list.Code != http.StatusOK || strings.Contains(list.Body.String(), configured.Project.ID) {
+		t.Fatalf("node session leaked in projects list: status=%d body=%s", list.Code, list.Body.String())
+	}
+	direct := projectAPIRequest(t, handler, http.MethodGet, "/v1/projects/"+configured.Project.ID, "")
+	if direct.Code != http.StatusNotFound {
+		t.Fatalf("node session reachable as Project: status=%d body=%s", direct.Code, direct.Body.String())
+	}
+	deleted := projectAPIRequest(t, handler, http.MethodDelete, "/v1/runtime/nodes/"+node.ID, "")
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete node with internal session status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	if _, err := projects.GetNodeSession(t.Context(), node.ID); !errors.Is(err, projectstore.ErrNodeSessionNotFound) {
+		t.Fatalf("node deletion kept internal session: %v", err)
+	}
+}
+
+func TestNodeSessionSettingsRetryCompletesRevokeAndApply(t *testing.T) {
+	server, handler, projects, nodes, _ := newProjectsHTTPTestServer(t)
+	node := pairProjectHTTPTestNode(t, nodes, "device_node_session_revoke_12345678", "NodeSessionRevoke")
+	configured, _, err := projects.PutNodeSessionConfiguration(t.Context(), node.ID, true, protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket, closeNode := connectProjectFakeNode(t, server, node)
+	defer closeNode()
+	initialApply := readProjectInvoke(t, socket)
+	if initialApply.Operation != protocol.OperationProjectDeploymentApply {
+		t.Fatalf("initial node session operation = %q", initialApply.Operation)
+	}
+	var initialPayload protocol.Deployment
+	if err := json.Unmarshal(initialApply.Arguments, &initialPayload); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectResult(t, socket, initialApply.RequestID, map[string]any{"deployment": initialPayload})
+	configured.Deployment = waitForDeploymentState(t, projects, configured.Project.ID, configured.Deployment.ID, func(value projectstore.Deployment) bool {
+		return value.ApplyStatus == string(protocol.DeploymentApplyApplied) && value.AppliedRevision == value.DesiredRevision
+	})
+
+	owner := "mcp:node-session-revoke"
+	session, _, err := projects.BeginWorkSession(t.Context(), owner, configured.Project.ID, "node-session-revoke", "sha256:node-session-revoke", configured.Project.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := projects.PutWorkTarget(t.Context(), owner, projectstore.WorkTarget{Target: protocol.WorkTarget{
+		WorkSessionID: session.ID, ProjectID: configured.Project.ID, DeploymentID: configured.Deployment.ID, NodeID: node.ID, CWDRel: ".",
+		DeploymentRevision: configured.Deployment.AppliedRevision, ContextRevision: "sha256:node-session-target", Status: protocol.TargetReady,
+		Permissions: configured.Deployment.Permissions,
+		Prompt:      protocol.ProjectPrompt{PromptRevision: "sha256:node-session-empty", Complete: true, Sources: []protocol.PromptSource{}},
+	}, PromptScopes: []protocol.PromptScopeRevision{{Scope: ".", PromptRevision: "sha256:node-session-empty"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projects.UpdateWorkSessionContext(t.Context(), owner, session.ID, configured.Project.Revision, protocol.WorkSessionReady, "sha256:node-session-context"); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a previous PUT whose desired-state transaction committed before
+	// its request was cancelled. Retrying the same body must still revoke the
+	// stale Target and converge the pending Deployment.
+	interrupted, created, err := projects.PutNodeSessionConfiguration(t.Context(), node.ID, false, protocol.DeploymentPermissions{Files: protocol.FileCapabilityNone})
+	if err != nil || created || interrupted.Deployment.ApplyStatus != string(protocol.DeploymentApplyPending) {
+		t.Fatalf("interrupted node session update = %#v created=%v err=%v", interrupted, created, err)
+	}
+	stillReady, err := projects.GetWorkTarget(t.Context(), owner, session.ID, target.Target.ID)
+	if err != nil || stillReady.Target.Status != protocol.TargetReady {
+		t.Fatalf("interrupted update unexpectedly revoked Target: %#v err=%v", stillReady, err)
+	}
+
+	responseDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		responseDone <- projectAPIRequest(t, handler, http.MethodPut, "/v1/runtime/nodes/"+node.ID+"/session", `{"enabled":false,"permissions":{"files":"none","shell":false,"browser":false,"dynamic_mcp":false,"acp":false}}`)
+	}()
+	revoke := readProjectInvoke(t, socket)
+	if revoke.Operation != protocol.OperationProjectTargetRevoke {
+		t.Fatalf("first node session update operation = %q", revoke.Operation)
+	}
+	storedTarget, err := projects.GetWorkTarget(t.Context(), owner, session.ID, target.Target.ID)
+	if err != nil || storedTarget.Target.Status != protocol.TargetRevoked {
+		t.Fatalf("node session Target was not persisted revoked before Bridge ack: %#v err=%v", storedTarget, err)
+	}
+	writeProjectResult(t, socket, revoke.RequestID, map[string]any{"target_id": target.Target.ID, "revoked": true})
+
+	apply := readProjectInvoke(t, socket)
+	if apply.Operation != protocol.OperationProjectDeploymentApply {
+		t.Fatalf("second node session update operation = %q", apply.Operation)
+	}
+	var disabledPayload protocol.Deployment
+	if err := json.Unmarshal(apply.Arguments, &disabledPayload); err != nil {
+		t.Fatal(err)
+	}
+	if disabledPayload.Enabled || disabledPayload.ApplyStatus != protocol.DeploymentApplyDisabled {
+		t.Fatalf("disabled node session apply payload = %#v", disabledPayload)
+	}
+	writeProjectResult(t, socket, apply.RequestID, map[string]any{"deployment": disabledPayload})
+	response := <-responseDone
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"enabled":false`) {
+		t.Fatalf("disable node session status=%d body=%s", response.Code, response.Body.String())
+	}
+	denied, callErr := server.callNodeOpen(withMCPClientBinding(t.Context(), owner), map[string]any{"node_id": node.ID, "client_request_id": "disabled-node-session"})
+	if callErr == nil || denied["code"] != "NODE_SESSION_DISABLED" {
+		t.Fatalf("disabled node_open = %#v err=%v", denied, callErr)
+	}
+}
+
 func TestNodeFullAccessIsIndependentFromOptionalProjectFolder(t *testing.T) {
 	_, handler, projects, nodes, _ := newProjectsHTTPTestServer(t)
 	node := pairProjectHTTPTestNode(t, nodes, "device_project_full_access_12345678", "FullAccessNode")
@@ -166,6 +294,35 @@ func TestNodeFullAccessIsIndependentFromOptionalProjectFolder(t *testing.T) {
 	effective = decodeDeploymentHTTPResponse(t, get.Body.Bytes())
 	if effective.Permissions.FullAccess || effective.DesiredRevision != "rev-3" {
 		t.Fatalf("disabled Full Access deployment = %#v", effective)
+	}
+}
+
+func TestTryApplyProjectDeploymentSkipsSupersededSnapshot(t *testing.T) {
+	server, _, projects, nodes, _ := newProjectsHTTPTestServer(t)
+	node := pairProjectHTTPTestNode(t, nodes, "device_stale_apply_12345678", "StaleApplyNode")
+	project, err := projects.CreateProject(t.Context(), projectstore.CreateProjectInput{Name: "Stale Apply", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, err := projects.CreateDeployment(t.Context(), projectstore.CreateDeploymentInput{
+		ProjectID: project.ID, NodeID: node.ID, Permissions: protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly}, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := projects.UpdateDeployment(t.Context(), project.ID, stale.ID, projectstore.UpdateDeploymentInput{
+		ExpectedRevision: stale.DesiredRevision, Permissions: protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly}, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := server.tryApplyProjectDeployment(t.Context(), stale)
+	if got.DesiredRevision != current.DesiredRevision || got.ApplyStatus != current.ApplyStatus {
+		t.Fatalf("stale apply returned %#v, want current %#v", got, current)
+	}
+	stored, err := projects.GetDeployment(t.Context(), project.ID, stale.ID)
+	if err != nil || stored.DesiredRevision != current.DesiredRevision || stored.ApplyStatus != string(protocol.DeploymentApplyPending) {
+		t.Fatalf("stale apply changed current desired state: %#v err=%v", stored, err)
 	}
 }
 

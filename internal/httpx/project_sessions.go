@@ -15,7 +15,7 @@ func (s *Server) projectSessionList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projectID := strings.TrimSpace(r.PathValue("projectID"))
-	if _, err := s.projects.GetProject(r.Context(), projectID); err != nil {
+	if _, err := s.projects.GetUserProject(r.Context(), projectID); err != nil {
 		writeProjectError(w, err)
 		return
 	}
@@ -51,7 +51,7 @@ func (s *Server) projectSessionGet(w http.ResponseWriter, r *http.Request) {
 	}
 	projectID := strings.TrimSpace(r.PathValue("projectID"))
 	workSessionID := strings.TrimSpace(r.PathValue("workSessionID"))
-	if _, err := s.projects.GetProject(r.Context(), projectID); err != nil {
+	if _, err := s.projects.GetUserProject(r.Context(), projectID); err != nil {
 		writeProjectError(w, err)
 		return
 	}

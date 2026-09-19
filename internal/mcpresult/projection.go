@@ -12,7 +12,7 @@ import (
 var removed = map[string][]string{
 	"read_file":                {"encoding", "size_bytes"},
 	"search_text":              {"query", "engine", "total_matches", "files_scanned", "bytes_scanned"},
-	"task_manage":              {"action", "count", "state_dir", "checkpoint_policy"},
+	"task_manage":              {"action", "count", "state_dir"},
 	"skill_package":            {"action", "count"},
 	"mcp_manage":               {"action", "count"},
 	"mcp_tool_search":          {"query", "server", "count"},
@@ -195,7 +195,7 @@ func Project(name string, input map[string]any) map[string]any {
 		}
 	case "project_list":
 		eachObject(out, "projects", func(project map[string]any) { remove(project, "revision", "enabled") })
-	case "project_open", "project_context":
+	case "project_open", "node_open", "project_context":
 		remove(out, "context_revision", "delivery")
 		project, _ := out["project"].(map[string]any)
 		remove(project, "revision", "enabled")

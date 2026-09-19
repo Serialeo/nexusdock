@@ -93,7 +93,7 @@ func TestInitializeMCPGatewayHasNoBuiltInInstructions(t *testing.T) {
 	}
 	central := map[string]bool{
 		"agentdock_context": false, mcpcontract.ToolProjectList: false, mcpcontract.ToolProjectOpen: false,
-		mcpcontract.ToolProjectContext: false, "workflow_template_manage": false,
+		mcpcontract.ToolNodeOpen: false, mcpcontract.ToolProjectContext: false, "workflow_template_manage": false,
 	}
 	for _, tool := range tools.Tools {
 		if tool.Name == "node_list" {
@@ -105,7 +105,7 @@ func TestInitializeMCPGatewayHasNoBuiltInInstructions(t *testing.T) {
 		central[tool.Name] = true
 		input := tool.InputSchema.(map[string]any)
 		properties := input["properties"].(map[string]any)
-		if _, hasNodeID := properties["node_id"]; hasNodeID {
+		if _, hasNodeID := properties["node_id"]; hasNodeID && tool.Name != mcpcontract.ToolNodeOpen {
 			t.Fatalf("central tool %s unexpectedly requires node_id: %#v", tool.Name, input)
 		}
 	}

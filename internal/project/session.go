@@ -48,6 +48,11 @@ type WorkTarget struct {
 	UpdatedAt    time.Time                      `json:"updated_at"`
 }
 
+type NodeWorkSession struct {
+	NodeID  string
+	Session WorkSession
+}
+
 func (s *Store) BeginWorkSession(ctx context.Context, ownerKey, projectID, clientRequestID, requestHash, projectRevision string) (WorkSession, bool, error) {
 	if s == nil || s.db == nil {
 		return WorkSession{}, false, errors.New("Project store 未初始化")
@@ -67,9 +72,10 @@ func (s *Store) BeginWorkSession(ctx context.Context, ownerKey, projectID, clien
 	now := time.Now().UTC()
 	result, err := s.db.ExecContext(ctx, `INSERT INTO work_sessions(
 		id, project_id, owner_key, client_request_id, request_hash, project_revision, status, context_revision, created_at, updated_at
-	) VALUES(?, ?, ?, ?, ?, ?, ?, '', ?, ?)
+	) SELECT ?, ?, ?, ?, ?, ?, ?, '', ?, ?
+	FROM projects WHERE id = ?
 	ON CONFLICT(owner_key, client_request_id) DO NOTHING`,
-		id, projectID, ownerKey, clientRequestID, requestHash, projectRevision, string(protocol.WorkSessionPreparing), formatTime(now), formatTime(now))
+		id, projectID, ownerKey, clientRequestID, requestHash, projectRevision, string(protocol.WorkSessionPreparing), formatTime(now), formatTime(now), projectID)
 	if err != nil {
 		return WorkSession{}, false, fmt.Errorf("创建 WorkSession: %w", err)
 	}
@@ -131,6 +137,53 @@ func (s *Store) ListProjectWorkSessions(ctx context.Context, projectID string, l
 		return nil, fmt.Errorf("遍历 Project WorkSessions: %w", err)
 	}
 	return items, nil
+}
+
+func (s *Store) ListNodeWorkSessions(ctx context.Context, limit int) ([]NodeWorkSession, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("Project store 未初始化")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT p.node_id, s.id, s.project_id, s.owner_key, s.client_request_id, s.request_hash,
+		s.project_revision, s.status, s.context_revision, s.created_at, s.updated_at
+		FROM work_sessions s JOIN projects p ON p.id = s.project_id
+		WHERE p.kind = 'node' ORDER BY s.updated_at DESC, s.id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("列出节点临时 WorkSessions: %w", err)
+	}
+	defer rows.Close()
+	items := make([]NodeWorkSession, 0)
+	for rows.Next() {
+		var item NodeWorkSession
+		if err := scanNodeWorkSession(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历节点临时 WorkSessions: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) GetNodeWorkSession(ctx context.Context, id string) (NodeWorkSession, error) {
+	if s == nil || s.db == nil {
+		return NodeWorkSession{}, errors.New("Project store 未初始化")
+	}
+	var item NodeWorkSession
+	err := scanNodeWorkSession(s.db.QueryRowContext(ctx, `SELECT p.node_id, s.id, s.project_id, s.owner_key, s.client_request_id, s.request_hash,
+		s.project_revision, s.status, s.context_revision, s.created_at, s.updated_at
+		FROM work_sessions s JOIN projects p ON p.id = s.project_id
+		WHERE p.kind = 'node' AND s.id = ?`, strings.TrimSpace(id)), &item)
+	if errors.Is(err, sql.ErrNoRows) {
+		return NodeWorkSession{}, ErrWorkSessionNotFound
+	}
+	return item, err
 }
 
 func (s *Store) GetProjectWorkSession(ctx context.Context, projectID, id string) (WorkSession, error) {
@@ -345,6 +398,32 @@ func (s *Store) RevokeTargetsForDeployment(ctx context.Context, deploymentID, re
 	return s.revokeTargets(ctx, "deployment_id = ?", []any{deploymentID}, reason, false)
 }
 
+// RevokeStaleTargetsForDeployment invalidates Targets created from an older
+// Deployment revision. Node-session configuration PUT uses this on every
+// retry so a request cancelled after committing desired state can safely
+// finish revocation without disturbing Targets already bound to that state.
+func (s *Store) RevokeStaleTargetsForDeployment(ctx context.Context, deploymentID, desiredRevision, reason string) ([]WorkTarget, error) {
+	deploymentID = strings.TrimSpace(deploymentID)
+	desiredRevision = strings.TrimSpace(desiredRevision)
+	if deploymentID == "" || desiredRevision == "" {
+		return nil, invalid("Deployment ID 和 desired revision 不能为空")
+	}
+	return s.revokeTargetsGuarded(ctx, "deployment_id = ? AND deployment_revision <> ?", []any{deploymentID, desiredRevision}, reason, false, func(tx *sql.Tx) error {
+		var current int
+		err := tx.QueryRowContext(ctx, `SELECT desired_revision FROM project_deployments WHERE id = ?`, deploymentID).Scan(&current)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrDeploymentNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("读取 Deployment 当前 revision: %w", err)
+		}
+		if revisionString(current) != desiredRevision {
+			return &RevisionConflictError{Resource: "deployment", Current: revisionString(current)}
+		}
+		return nil
+	})
+}
+
 // RevokeTargetsForProject invalidates every active Target in a Project and
 // marks its WorkSessions cancelled. This is used when the Project itself is
 // disabled or deleted; preserving the rows keeps historical routing evidence
@@ -358,6 +437,10 @@ func (s *Store) RevokeTargetsForProject(ctx context.Context, projectID, reason s
 }
 
 func (s *Store) revokeTargets(ctx context.Context, predicate string, args []any, reason string, cancelSessions bool) ([]WorkTarget, error) {
+	return s.revokeTargetsGuarded(ctx, predicate, args, reason, cancelSessions, nil)
+}
+
+func (s *Store) revokeTargetsGuarded(ctx context.Context, predicate string, args []any, reason string, cancelSessions bool, guard func(*sql.Tx) error) ([]WorkTarget, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("Project store 未初始化")
 	}
@@ -366,6 +449,11 @@ func (s *Store) revokeTargets(ctx context.Context, predicate string, args []any,
 		return nil, fmt.Errorf("开始撤销 Project Targets: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if guard != nil {
+		if err := guard(tx); err != nil {
+			return nil, err
+		}
+	}
 
 	query := `SELECT id, work_session_id, project_id, deployment_id, node_id, cwd_rel,
 		deployment_revision, context_revision, status, permissions_json, prompt_json, prompt_scopes_json, source_provenance_json,
@@ -464,6 +552,22 @@ func scanWorkSession(row scanner) (WorkSession, error) {
 	}
 	item.UpdatedAt, err = parseTime(updated)
 	return item, err
+}
+
+func scanNodeWorkSession(row scanner, item *NodeWorkSession) error {
+	var status, created, updated string
+	if err := row.Scan(&item.NodeID, &item.Session.ID, &item.Session.ProjectID, &item.Session.OwnerKey, &item.Session.ClientRequestID,
+		&item.Session.RequestHash, &item.Session.ProjectRevision, &status, &item.Session.ContextRevision, &created, &updated); err != nil {
+		return err
+	}
+	item.Session.Status = protocol.WorkSessionStatus(status)
+	var err error
+	item.Session.CreatedAt, err = parseTime(created)
+	if err != nil {
+		return err
+	}
+	item.Session.UpdatedAt, err = parseTime(updated)
+	return err
 }
 
 func scanWorkTarget(row scanner) (WorkTarget, error) {

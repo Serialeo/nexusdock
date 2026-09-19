@@ -59,7 +59,7 @@ func isNexusCentralTool(name string) bool {
 func fleetToolPresentation(name string) (string, string) {
 	name = strings.TrimSpace(name)
 	return "AgentDock node tool: " + name,
-		"Route the AgentDock tool " + name + " to the node selected by node_id. The target AgentDock validates arguments against its local tool contract."
+		"Route the AgentDock tool " + name + " through the work_session_id and target_id returned by project_open, node_open, or project_context. The target AgentDock validates arguments against its local tool contract."
 }
 
 func sanitizeFleetToolDescriptor(descriptor agentdock.ToolDescriptor) (agentdock.ToolDescriptor, error) {

@@ -6,6 +6,7 @@ import { buildTaskListQuery, collectTaskSelection, deleteTaskBatch, type TaskFil
 import './task-center.css';
 import Dialog from '../Dialog';
 import MobileDrilldownBar from '../MobileDrilldownBar';
+import CheckpointPromptPanel from './CheckpointPromptPanel';
 
 type Tone = 'ok' | 'warn' | 'danger' | 'muted';
 type TaskStatus = 'all' | 'active' | 'completed' | 'blocked';
@@ -123,6 +124,7 @@ export function TaskCenterPage({ nodeID, refreshToken }: { nodeID: string; refre
   const [selectedId, setSelectedId] = useState('');
   const [checked, setChecked] = useState<Map<string, OpsTask>>(() => new Map());
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  const [checkpointPromptOpen, setCheckpointPromptOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<OpsTask[] | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteProgress, setDeleteProgress] = useState({ completed: 0, total: 0 });
@@ -306,6 +308,7 @@ export function TaskCenterPage({ nodeID, refreshToken }: { nodeID: string; refre
       <div className="ops-toolbar is-console">
         <div className="ops-segmented">{(['active', 'blocked', 'completed', 'all'] as TaskStatus[]).map((status) => <button type="button" key={status} className={filters.status === status ? 'is-active' : ''} aria-pressed={filters.status === status} disabled={operationBusy} onClick={() => changeFilters({ status })}><span>{taskStatusLabels[status]}</span><em>{currentList.data.counts[status]}</em></button>)}</div>
         <label className="ops-search"><Search size={15} /><input aria-label="搜索任务" value={filters.query} disabled={operationBusy} onChange={(event) => changeFilters({ query: event.target.value })} placeholder="搜索任务或当前步骤" /></label>
+        <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy} onClick={() => setCheckpointPromptOpen(true)}>Checkpoint 提示词</button>
         <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy || Boolean(filterError)} onClick={() => { setChecked(new Map()); void loadTasks(); detail.reload(); }}>刷新</button>
         <span className="ops-auto-refresh">{!pollingPaused && <i aria-hidden="true" />}{pollingPaused ? '选择期间暂停刷新' : '自动刷新'}</span>
       </div>
@@ -351,6 +354,9 @@ export function TaskCenterPage({ nodeID, refreshToken }: { nodeID: string; refre
         </div>
       </section>
     </OpsShell>
+    {checkpointPromptOpen && <Dialog title="Checkpoint 提示词" description="配置任务保存断点时交付给 AI 的提示词。" wide onClose={() => setCheckpointPromptOpen(false)}>
+      <CheckpointPromptPanel />
+    </Dialog>}
     {pendingDelete && <Dialog title={deleteFailures.length > 0 ? '部分任务删除失败' : pendingDelete.length > 1 ? '批量删除任务' : '删除任务'} description="任务记录和步骤将被永久删除，无法恢复。此操作不会终止进程或删除工作目录。" closeDisabled={deleting} onClose={() => setPendingDelete(null)}>
       <div className="ops-delete-dialog">
         <p>确定删除以下 <strong>{pendingDelete.length}</strong> 条任务记录？</p>

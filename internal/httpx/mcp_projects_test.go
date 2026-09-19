@@ -21,6 +21,28 @@ type projectToolCallResult struct {
 	err    error
 }
 
+func TestNodeOpenCoordinationIsKeyedAndCancellationAware(t *testing.T) {
+	server := &Server{}
+	firstKey := operationLockKey{scope: "node_open", primary: "owner-a", secondary: "request-a"}
+	unlockFirst, err := server.acquireOperation(t.Context(), firstKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlockFirst()
+
+	unlockIndependent, err := server.acquireOperation(t.Context(), operationLockKey{scope: "node_open", primary: "owner-b", secondary: "request-b"})
+	if err != nil {
+		t.Fatalf("independent Node open was blocked: %v", err)
+	}
+	unlockIndependent()
+
+	waitCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := server.acquireOperation(waitCtx, firstKey); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled duplicate wait error = %v, want context.Canceled", err)
+	}
+}
+
 func TestProjectOpenIsIdempotentOwnerBoundAndUsesBridgeV4TargetBinding(t *testing.T) {
 	server, projects, project, deployment, socket, closeNode := prepareOnlineProjectMCPTest(t)
 	defer closeNode()
@@ -123,6 +145,155 @@ func TestProjectOpenIsIdempotentOwnerBoundAndUsesBridgeV4TargetBinding(t *testin
 	invalidList, err := server.callNexusTool(ownerCtx, mcpcontract.ToolProjectList, map[string]any{"node_id": deployment.NodeID})
 	if err == nil || invalidList["code"] != "INVALID_PROJECT" {
 		t.Fatalf("strict project_list accepted arguments: result=%#v err=%v", invalidList, err)
+	}
+}
+
+func TestNodeOpenRequiresSettingsAndBindsZeroSourceTarget(t *testing.T) {
+	server, _, projects, nodes, _ := newProjectsHTTPTestServer(t)
+	node := pairProjectHTTPTestNode(t, nodes, "device_node_session_mcp_12345678", "Ad Hoc Node")
+	ctx := withMCPClientBinding(t.Context(), "mcp:node-session-owner")
+
+	disabled, err := server.callNodeOpen(ctx, map[string]any{"node_id": node.ID, "client_request_id": "node-disabled"})
+	if err == nil || disabled["code"] != "NODE_SESSION_DISABLED" {
+		t.Fatalf("unconfigured node_open = %#v err=%v", disabled, err)
+	}
+	if _, err := projects.GetNodeSession(t.Context(), node.ID); !errors.Is(err, projectstore.ErrNodeSessionNotFound) {
+		t.Fatalf("disabled node_open created configuration: %v", err)
+	}
+
+	configured, _, err := projects.PutNodeSessionConfiguration(t.Context(), node.ID, true, protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readFile := protocol.ToolDescriptor{
+		Name: "read_file", Title: "Read file", Description: "read test file",
+		InputSchema:  map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}, "required": []any{"path"}, "additionalProperties": false},
+		OutputSchema: map[string]any{"type": "object", "additionalProperties": true},
+	}
+	socket, closeNode := connectProjectFakeNodeWithTools(t, server, node, []protocol.ToolDescriptor{readFile})
+	defer closeNode()
+	apply := readProjectInvoke(t, socket)
+	if apply.Operation != protocol.OperationProjectDeploymentApply {
+		t.Fatalf("node session apply operation = %q", apply.Operation)
+	}
+	var applied protocol.Deployment
+	if err := json.Unmarshal(apply.Arguments, &applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied.ProjectID != configured.Project.ID || applied.WorkingFolder != "" {
+		t.Fatalf("node session applied deployment = %#v", applied)
+	}
+	writeProjectResult(t, socket, apply.RequestID, map[string]any{"deployment": applied})
+	configured.Deployment = waitForDeploymentState(t, projects, configured.Project.ID, configured.Deployment.ID, func(value projectstore.Deployment) bool {
+		return value.ApplyStatus == string(protocol.DeploymentApplyApplied) && value.AppliedRevision == value.DesiredRevision
+	})
+
+	opened := make(chan projectToolCallResult, 1)
+	go func() {
+		result, callErr := server.callNodeOpen(ctx, map[string]any{"node_id": node.ID, "client_request_id": "node-open-1", "cwd_rel": "tmp"})
+		opened <- projectToolCallResult{result: result, err: callErr}
+	}()
+	promptInvoke := readProjectInvoke(t, socket)
+	if promptInvoke.Operation != protocol.OperationProjectPromptLoad {
+		t.Fatalf("node session prompt operation = %q", promptInvoke.Operation)
+	}
+	writeProjectResult(t, socket, promptInvoke.RequestID, protocol.ProjectPromptLoadResult{
+		DeploymentID: configured.Deployment.ID,
+		CWDRel:       "tmp",
+		Prompt: protocol.ProjectPrompt{
+			PromptRevision: "sha256:node-session-empty", Complete: true, Bytes: 0, Sources: []protocol.PromptSource{},
+		},
+		SourceProvenance: protocol.SourceProvenance{Kind: protocol.SourceProvenanceNone},
+	})
+	bindInvoke := readProjectInvoke(t, socket)
+	var bind protocol.ProjectTargetBindRequest
+	if err := json.Unmarshal(bindInvoke.Arguments, &bind); err != nil {
+		t.Fatal(err)
+	}
+	if bind.ProjectID != configured.Project.ID || bind.DeploymentID != configured.Deployment.ID || bind.CWDRel != "tmp" || bind.SourceProvenance.Kind != protocol.SourceProvenanceNone {
+		t.Fatalf("node session bind = %#v", bind)
+	}
+	writeProjectResult(t, socket, bindInvoke.RequestID, projectTestTargetAcknowledgment(bind))
+	result := <-opened
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	normalized := assertCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolNodeOpen, result.result)
+	if normalized["work_session_id"] != bind.WorkSessionID || normalized["status"] != string(protocol.WorkSessionReady) {
+		t.Fatalf("node_open result = %#v", normalized)
+	}
+	nodeView, _ := normalized["node"].(map[string]any)
+	if nodeView["node_id"] != node.ID || nodeView["name"] != node.Name {
+		t.Fatalf("node_open node = %#v", nodeView)
+	}
+	if _, exists := normalized["project"]; exists {
+		t.Fatalf("node_open leaked internal Project: %#v", normalized)
+	}
+	repeated, err := server.callNodeOpen(ctx, map[string]any{"node_id": node.ID, "client_request_id": "node-open-1", "cwd_rel": "tmp"})
+	if err != nil || repeated["work_session_id"] != result.result["work_session_id"] {
+		t.Fatalf("idempotent node_open = %#v err=%v", repeated, err)
+	}
+
+	refreshed := make(chan projectToolCallResult, 1)
+	go func() {
+		value, callErr := server.callProjectContext(ctx, map[string]any{"work_session_id": bind.WorkSessionID, "target_id": bind.TargetID, "cwd_rel": "tmp/sub"})
+		refreshed <- projectToolCallResult{result: value, err: callErr}
+	}()
+	refreshPrompt := readProjectInvoke(t, socket)
+	writeProjectResult(t, socket, refreshPrompt.RequestID, protocol.ProjectPromptLoadResult{
+		DeploymentID: configured.Deployment.ID, CWDRel: "tmp/sub",
+		Prompt:           protocol.ProjectPrompt{PromptRevision: "sha256:node-session-empty-sub", Complete: true, Bytes: 0, Sources: []protocol.PromptSource{}},
+		SourceProvenance: protocol.SourceProvenance{Kind: protocol.SourceProvenanceNone},
+	})
+	rebindInvoke := readProjectInvoke(t, socket)
+	var rebind protocol.ProjectTargetRebindRequest
+	if err := json.Unmarshal(rebindInvoke.Arguments, &rebind); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectResult(t, socket, rebindInvoke.RequestID, projectTestTargetRebindAcknowledgment(rebind))
+	refreshResult := <-refreshed
+	if refreshResult.err != nil {
+		t.Fatal(refreshResult.err)
+	}
+	refreshNormalized := assertCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectContext, refreshResult.result)
+	if _, exists := refreshNormalized["project"]; exists {
+		t.Fatalf("node project_context leaked internal Project: %#v", refreshNormalized)
+	}
+	if _, exists := refreshNormalized["node"]; !exists {
+		t.Fatalf("node project_context missing node identity: %#v", refreshNormalized)
+	}
+
+	recoveryHash, err := hashNodeOpenRequest(node.ID, "recovered")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoverySession, created, err := projects.BeginWorkSession(t.Context(), "mcp:node-session-owner", configured.Project.ID, "node-open-recovery", recoveryHash, configured.Project.Revision)
+	if err != nil || !created {
+		t.Fatalf("seed interrupted node session = %#v created=%v err=%v", recoverySession, created, err)
+	}
+	recovered := make(chan projectToolCallResult, 1)
+	go func() {
+		value, callErr := server.callNodeOpen(ctx, map[string]any{"node_id": node.ID, "client_request_id": "node-open-recovery", "cwd_rel": "recovered"})
+		recovered <- projectToolCallResult{result: value, err: callErr}
+	}()
+	recoveryPrompt := readProjectInvoke(t, socket)
+	writeProjectResult(t, socket, recoveryPrompt.RequestID, protocol.ProjectPromptLoadResult{
+		DeploymentID: configured.Deployment.ID, CWDRel: "recovered",
+		Prompt:           protocol.ProjectPrompt{PromptRevision: "sha256:node-session-recovered", Complete: true, Bytes: 0, Sources: []protocol.PromptSource{}},
+		SourceProvenance: protocol.SourceProvenance{Kind: protocol.SourceProvenanceNone},
+	})
+	recoveryBindInvoke := readProjectInvoke(t, socket)
+	var recoveryBind protocol.ProjectTargetBindRequest
+	if err := json.Unmarshal(recoveryBindInvoke.Arguments, &recoveryBind); err != nil {
+		t.Fatal(err)
+	}
+	if recoveryBind.WorkSessionID != recoverySession.ID || recoveryBind.CWDRel != "recovered" {
+		t.Fatalf("recovered node session bind = %#v", recoveryBind)
+	}
+	writeProjectResult(t, socket, recoveryBindInvoke.RequestID, projectTestTargetAcknowledgment(recoveryBind))
+	recoveryResult := <-recovered
+	if recoveryResult.err != nil || recoveryResult.result["work_session_id"] != recoverySession.ID {
+		t.Fatalf("recovered node_open = %#v err=%v", recoveryResult.result, recoveryResult.err)
 	}
 }
 

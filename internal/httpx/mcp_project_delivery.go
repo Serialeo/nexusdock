@@ -15,7 +15,7 @@ import (
 )
 
 func isProjectContextTool(name string) bool {
-	return name == "project_open" || name == "project_context"
+	return name == "project_open" || name == "node_open" || name == "project_context"
 }
 
 func projectContextAckFromRequest(request *mcpsdk.CallToolRequest) (*protocol.ProjectContextAcknowledgment, error) {

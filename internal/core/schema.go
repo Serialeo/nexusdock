@@ -174,6 +174,8 @@ END`,
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     orchestration_policy TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'project' CHECK (kind IN ('project', 'node')),
+    node_id TEXT REFERENCES agentdock_devices(id) ON DELETE CASCADE,
     revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
     enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
     created_at TEXT NOT NULL,
@@ -326,6 +328,12 @@ END`,
     mcp_apps_enabled INTEGER NOT NULL DEFAULT 1 CHECK (mcp_apps_enabled IN (0, 1)),
     updated_at TEXT NOT NULL
 )`,
+	`CREATE TABLE IF NOT EXISTS checkpoint_prompt_settings (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    prompt TEXT,
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    updated_at TEXT NOT NULL
+)`,
 	`CREATE INDEX IF NOT EXISTS idx_agentdock_pairing_codes_active
     ON agentdock_pairing_codes(code_hash, used_at, expires_at)`,
 	`CREATE TABLE IF NOT EXISTS runtime_ai_settings (
@@ -402,11 +410,18 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
 		{"runtime_ai_settings", "stage3_review_node_id", "TEXT NOT NULL DEFAULT ''"},
 		{"runtime_ai_settings", "revision", "INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1)"},
 		{"agentdock_devices", "full_access", "INTEGER NOT NULL DEFAULT 0 CHECK (full_access IN (0, 1))"},
+		{"projects", "kind", "TEXT NOT NULL DEFAULT 'project' CHECK (kind IN ('project', 'node'))"},
+		{"projects", "node_id", "TEXT REFERENCES agentdock_devices(id) ON DELETE CASCADE"},
 		{"work_targets", "source_provenance_json", `TEXT NOT NULL DEFAULT '{"kind":"none","repository_root":"","head":"","branch":"","detached":false,"unborn":false,"dirty":false}'`},
 	} {
 		if err := ensureColumn(ctx, db, migration.table, migration.column, migration.definition); err != nil {
 			return err
 		}
+	}
+	// 部分唯一索引必须在旧库补列之后创建，否则 currentSchema 会在迁移前引用不存在的列。
+	if _, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_node_session
+    ON projects(node_id) WHERE kind = 'node'`); err != nil {
+		return fmt.Errorf("ensure node session project index: %w", err)
 	}
 	for _, name := range unusedTables {
 		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+name); err != nil {

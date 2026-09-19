@@ -108,6 +108,44 @@ func TestEnsureSchemaUpgradesDatabaseWithoutRewritingExistingTables(t *testing.T
 	}
 }
 
+func TestEnsureSchemaAddsNodeSessionProjectColumnsAfterLegacyTable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "node-session-upgrade.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `CREATE TABLE agentdock_devices (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE projects (
+		id TEXT PRIMARY KEY, name TEXT NOT NULL, orchestration_policy TEXT NOT NULL DEFAULT '',
+		revision INTEGER NOT NULL DEFAULT 1, enabled INTEGER NOT NULL DEFAULT 1,
+		created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO projects(id,name,created_at,updated_at) VALUES('legacy-project','Legacy','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var kind string
+	var nodeID any
+	if err := db.QueryRowContext(ctx, `SELECT kind,node_id FROM projects WHERE id='legacy-project'`).Scan(&kind, &nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "project" || nodeID != nil {
+		t.Fatalf("legacy project migrated to kind=%q node_id=%#v", kind, nodeID)
+	}
+	var indexName string
+	if err := db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_projects_node_session'`).Scan(&indexName); err != nil {
+		t.Fatalf("node session unique index missing: %v", err)
+	}
+}
+
 func TestProjectSchemaUpgradePreservesUnrelatedControlPlaneData(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

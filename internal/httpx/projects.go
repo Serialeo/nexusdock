@@ -56,6 +56,8 @@ type deploymentDeleteRequest struct {
 }
 
 func (s *Server) registerProjectRoutes(mux *http.ServeMux, protected func(http.HandlerFunc) http.HandlerFunc) {
+	mux.HandleFunc("GET /v1/sessions/node", protected(s.nodeSessionList))
+	mux.HandleFunc("GET /v1/sessions/node/{workSessionID}", protected(s.nodeSessionGet))
 	mux.HandleFunc("GET /v1/projects", protected(s.projectList))
 	mux.HandleFunc("POST /v1/projects", protected(s.projectCreate))
 	mux.HandleFunc("GET /v1/projects/{projectID}", protected(s.projectGet))
@@ -89,7 +91,7 @@ func (s *Server) projectGet(w http.ResponseWriter, r *http.Request) {
 	if !s.requireProjectStore(w) {
 		return
 	}
-	item, err := s.projects.GetProject(r.Context(), r.PathValue("projectID"))
+	item, err := s.projects.GetUserProject(r.Context(), r.PathValue("projectID"))
 	if err != nil {
 		writeProjectError(w, err)
 		return
@@ -125,6 +127,10 @@ func (s *Server) projectUpdate(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
+	if _, err := s.projects.GetUserProject(r.Context(), r.PathValue("projectID")); err != nil {
+		writeProjectError(w, err)
+		return
+	}
 	item, err := s.projects.UpdateProject(r.Context(), r.PathValue("projectID"), projectstore.UpdateProjectInput{
 		ExpectedRevision: request.ExpectedRevision, Name: request.Name, OrchestrationPolicy: request.OrchestrationPolicy, Enabled: request.Enabled,
 	})
@@ -152,6 +158,10 @@ func (s *Server) projectDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projectID := r.PathValue("projectID")
+	if _, err := s.projects.GetUserProject(r.Context(), projectID); err != nil {
+		writeProjectError(w, err)
+		return
+	}
 	deployments, err := s.projects.DeleteProject(r.Context(), projectID, request.ExpectedRevision)
 	if err != nil {
 		writeProjectError(w, err)
@@ -173,6 +183,10 @@ func (s *Server) deploymentGet(w http.ResponseWriter, r *http.Request) {
 	if !s.requireProjectStore(w) {
 		return
 	}
+	if _, err := s.projects.GetUserProject(r.Context(), r.PathValue("projectID")); err != nil {
+		writeProjectError(w, err)
+		return
+	}
 	item, err := s.projects.GetDeployment(r.Context(), r.PathValue("projectID"), r.PathValue("deploymentID"))
 	if err != nil {
 		writeProjectError(w, err)
@@ -186,7 +200,7 @@ func (s *Server) deploymentList(w http.ResponseWriter, r *http.Request) {
 	if !s.requireProjectStore(w) {
 		return
 	}
-	if _, err := s.projects.GetProject(r.Context(), r.PathValue("projectID")); err != nil {
+	if _, err := s.projects.GetUserProject(r.Context(), r.PathValue("projectID")); err != nil {
 		writeProjectError(w, err)
 		return
 	}
@@ -235,6 +249,10 @@ func (s *Server) deploymentUpdate(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
+	if _, err := s.projects.GetUserProject(r.Context(), r.PathValue("projectID")); err != nil {
+		writeProjectError(w, err)
+		return
+	}
 	request.Permissions.FullAccess = false
 	item, err := s.projects.UpdateDeployment(r.Context(), r.PathValue("projectID"), r.PathValue("deploymentID"), projectstore.UpdateDeploymentInput{
 		ExpectedRevision: request.ExpectedRevision, WorkingFolder: request.WorkingFolder, Role: request.Role,
@@ -265,6 +283,10 @@ func (s *Server) deploymentDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	projectID := r.PathValue("projectID")
 	deploymentID := r.PathValue("deploymentID")
+	if _, err := s.projects.GetUserProject(r.Context(), projectID); err != nil {
+		writeProjectError(w, err)
+		return
+	}
 	item, err := s.projects.DeleteDeployment(r.Context(), projectID, deploymentID, request.ExpectedRevision)
 	if err != nil {
 		writeProjectError(w, err)
@@ -282,6 +304,10 @@ func (s *Server) deploymentDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deploymentApply(w http.ResponseWriter, r *http.Request) {
 	if !s.requireProjectStore(w) {
+		return
+	}
+	if _, err := s.projects.GetUserProject(r.Context(), r.PathValue("projectID")); err != nil {
+		writeProjectError(w, err)
 		return
 	}
 	item, err := s.projects.GetDeployment(r.Context(), r.PathValue("projectID"), r.PathValue("deploymentID"))
@@ -318,6 +344,19 @@ func (s *Server) tryApplyProjectDeployment(ctx context.Context, deployment proje
 	if s.projects == nil {
 		return deployment
 	}
+	unlock, lockErr := s.acquireOperation(ctx, operationLockKey{scope: "deployment_apply", primary: deployment.ID})
+	if lockErr != nil {
+		return deployment
+	}
+	defer unlock()
+	current, currentErr := s.projects.GetDeployment(ctx, deployment.ProjectID, deployment.ID)
+	if currentErr != nil {
+		return deployment
+	}
+	if current.DesiredRevision != deployment.DesiredRevision {
+		return current
+	}
+	deployment = current
 	if s.agentDock == nil || s.agentDockHub == nil {
 		updated, err := s.projects.MarkPending(ctx, deployment.ProjectID, deployment.ID, deployment.DesiredRevision, "AgentDock 连接服务不可用")
 		if err == nil {

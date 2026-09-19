@@ -309,6 +309,65 @@ func TestDeploymentUpdateRevalidatesWorkingFolderAgainstNodeOS(t *testing.T) {
 	}
 }
 
+func TestNodeSessionConfigurationUsesHiddenSingleDeployment(t *testing.T) {
+	store, db := newProjectStoreForTest(t)
+	insertNodeForProjectTest(t, db, "node-session-a", "4")
+
+	if _, err := store.GetNodeSession(t.Context(), "node-session-a"); !errors.Is(err, ErrNodeSessionNotFound) {
+		t.Fatalf("unconfigured node session error = %v", err)
+	}
+	permissions := protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadOnly, Shell: true}
+	configured, created, err := store.PutNodeSessionConfiguration(t.Context(), "node-session-a", true, permissions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || configured.Project.Kind != ProjectKindNode || configured.Project.NodeID != "node-session-a" {
+		t.Fatalf("node session project = %#v created=%v", configured.Project, created)
+	}
+	if configured.Deployment.WorkingFolder != "" || !configured.Deployment.Enabled || configured.Deployment.Permissions != permissions {
+		t.Fatalf("node session deployment = %#v", configured.Deployment)
+	}
+	projects, err := store.ListProjects(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("node session leaked into project list: %#v", projects)
+	}
+	if _, err := store.GetUserProject(t.Context(), configured.Project.ID); !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("node session leaked through user project lookup: %v", err)
+	}
+
+	repeated, created, err := store.PutNodeSessionConfiguration(t.Context(), "node-session-a", true, permissions)
+	if err != nil || created || repeated.Deployment.DesiredRevision != "rev-1" {
+		t.Fatalf("idempotent configuration = %#v created=%v err=%v", repeated, created, err)
+	}
+	disabled, created, err := store.PutNodeSessionConfiguration(t.Context(), "node-session-a", false, protocol.DeploymentPermissions{Files: protocol.FileCapabilityNone})
+	if err != nil || created || disabled.Deployment.Enabled || disabled.Deployment.DesiredRevision != "rev-2" {
+		t.Fatalf("updated configuration = %#v created=%v err=%v", disabled, created, err)
+	}
+	workSession, _, err := store.BeginWorkSession(t.Context(), "owner-node", disabled.Project.ID, "node-request", "sha256:node-request", disabled.Project.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := store.ListNodeWorkSessions(t.Context(), 10)
+	if err != nil || len(listed) != 1 || listed[0].NodeID != "node-session-a" || listed[0].Session.ID != workSession.ID {
+		t.Fatalf("listed node sessions = %#v err=%v", listed, err)
+	}
+	if got, err := store.GetNodeWorkSession(t.Context(), workSession.ID); err != nil || got.NodeID != "node-session-a" {
+		t.Fatalf("get node session = %#v err=%v", got, err)
+	}
+	if err := store.DeleteNodeSession(t.Context(), "node-session-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetNodeSession(t.Context(), "node-session-a"); !errors.Is(err, ErrNodeSessionNotFound) {
+		t.Fatalf("deleted node session error = %v", err)
+	}
+	if _, err := store.GetNodeWorkSession(t.Context(), workSession.ID); !errors.Is(err, ErrWorkSessionNotFound) {
+		t.Fatalf("deleted node WorkSession error = %v", err)
+	}
+}
+
 func newProjectStoreForTest(t *testing.T) (*Store, *sql.DB) {
 	t.Helper()
 	db, err := core.OpenSQLite(t.Context(), ":memory:", 1)

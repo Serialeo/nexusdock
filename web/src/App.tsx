@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Activity, BrainCircuit, Cable, ChevronRight,
   CircleAlert, Database, FileJson, Folder, FolderKanban, Home, ListChecks, Menu, RefreshCw,
-  ServerCog, Settings, ShieldCheck, UserRound, Wrench, X,
+  ServerCog, Settings, ShieldCheck, UserRound, Waypoints, Wrench, X,
 } from 'lucide-react';
 import RecallWorkspace from './RecallWorkspace';
 import { type WebSession } from './Auth';
@@ -16,6 +16,7 @@ import { SkillsPage, TaskCenterPage } from './components/runtime/RuntimePages';
 import MCPPage from './components/runtime/MCPPage';
 import NodeFilesPage from './components/runtime/NodeFilesPage';
 import ProjectsPage from './components/projects/ProjectsPage';
+import NodeSessionsPage from './components/projects/NodeSessionsPage';
 import {
   AgentDockNodeRequired,
   AgentDockNodeSelector,
@@ -25,7 +26,7 @@ import {
 import './nexus.css';
 
 type RuntimeSection = 'tasks' | 'files' | 'skills' | 'mcp';
-type Section = 'home' | 'projects' | 'recall' | 'templates' | RuntimeSection | 'settings';
+type Section = 'home' | 'projects' | 'sessions' | 'recall' | 'templates' | RuntimeSection | 'settings';
 type SettingsSection = 'account' | 'mcp' | 'ai' | 'system';
 type Tone = 'ok' | 'warn' | 'danger' | 'info' | 'muted';
 
@@ -74,6 +75,7 @@ const RUNTIME_SECTIONS: RuntimeSectionMeta[] = [
 const NAV: SectionMeta[] = [
   { id: 'home', label: '总览', icon: Home, scope: 'work' },
   { id: 'projects', label: 'Projects', icon: FolderKanban, scope: 'work' },
+  { id: 'sessions', label: 'Sessions', icon: Waypoints, scope: 'work' },
   { id: 'recall', label: 'Recall', icon: Database, scope: 'knowledge' },
   { id: 'templates', label: 'Workflow', icon: FileJson, scope: 'knowledge' },
   ...RUNTIME_SECTIONS.map((item) => ({ ...item, scope: 'runtime' })),
@@ -217,6 +219,7 @@ export default function App() {
         <div className="nexus-content">
           {section === 'home' && <HomePage refreshToken={refreshToken} runtimeNodes={runtimeNodes} navigate={navigate} />}
           {section === 'projects' && <ProjectsPage nodes={runtimeNodes.nodes} refreshToken={refreshToken} />}
+          {section === 'sessions' && <NodeSessionsPage />}
           {section === 'recall' && <RecallWorkspace refreshToken={refreshToken} />}
           {section === 'templates' && <WorkflowTemplatesPage refreshToken={refreshToken} />}
           {isRuntimeSection(section) && <RuntimeContent active={section} refreshToken={refreshToken} runtimeNodes={runtimeNodes} />}

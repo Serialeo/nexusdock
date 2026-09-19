@@ -27,6 +27,12 @@ type projectOpenRequest struct {
 	Targets         []projectOpenTargetSelection `json:"targets,omitempty"`
 }
 
+type nodeOpenRequest struct {
+	NodeID          string `json:"node_id"`
+	ClientRequestID string `json:"client_request_id"`
+	CWDRel          string `json:"cwd_rel,omitempty"`
+}
+
 type projectContextRequest struct {
 	WorkSessionID string `json:"work_session_id"`
 	TargetID      string `json:"target_id"`
@@ -85,7 +91,7 @@ func (s *Server) callProjectOpen(ctx context.Context, args map[string]any) (map[
 	if targetsProvided && len(request.Targets) == 0 {
 		return projectToolError("INVALID_PROJECT", "targets must contain at least one Deployment when explicitly provided", nil)
 	}
-	project, err := s.projects.GetProject(ctx, request.ProjectID)
+	project, err := s.projects.GetUserProject(ctx, request.ProjectID)
 	if err != nil {
 		return projectToolStoreError(err)
 	}
@@ -135,6 +141,136 @@ func (s *Server) callProjectOpen(ctx context.Context, args map[string]any) (map[
 		}
 	}
 	return s.projectOpenResult(ctx, binding.OwnerKey, session.ID)
+}
+
+func (s *Server) callNodeOpen(ctx context.Context, args map[string]any) (map[string]any, error) {
+	binding, ok := mcpClientBindingFromContext(ctx)
+	if !ok {
+		return projectToolError("MCP_CLIENT_BINDING_REQUIRED", "authenticated MCP client binding is required", nil)
+	}
+	if s.projects == nil || s.agentDock == nil || s.agentDockHub == nil {
+		return projectToolError("NODE_SESSION_STORE_UNAVAILABLE", "Node session execution services are unavailable", nil)
+	}
+	var request nodeOpenRequest
+	if err := decodeProjectToolArgs(args, &request); err != nil {
+		return projectToolError("INVALID_NODE_SESSION", "invalid node_open request", map[string]any{"reason": err.Error()})
+	}
+	request.NodeID = strings.TrimSpace(request.NodeID)
+	request.ClientRequestID = strings.TrimSpace(request.ClientRequestID)
+	request.CWDRel = strings.TrimSpace(request.CWDRel)
+	if request.CWDRel == "" {
+		request.CWDRel = "."
+	}
+	if request.NodeID == "" || request.ClientRequestID == "" {
+		return projectToolError("INVALID_NODE_SESSION", "node_id and client_request_id are required", nil)
+	}
+	node, err := s.agentDock.Get(ctx, request.NodeID)
+	if err != nil || !node.Enabled {
+		return projectToolError("AGENTDOCK_NODE_NOT_FOUND", "AgentDock Node is unavailable", map[string]any{"node_id": request.NodeID})
+	}
+	configured, err := s.projects.GetNodeSession(ctx, request.NodeID)
+	if errors.Is(err, projectstore.ErrNodeSessionNotFound) || (err == nil && !configured.Deployment.Enabled) {
+		return projectToolError("NODE_SESSION_DISABLED", "Node temporary sessions are disabled; enable them in NexusDock Settings > System and Nodes", map[string]any{"node_id": request.NodeID})
+	}
+	if err != nil {
+		return projectToolError("NODE_SESSION_OPERATION_FAILED", "failed to read Node session configuration", map[string]any{"reason": err.Error()})
+	}
+	requestHash, err := hashNodeOpenRequest(request.NodeID, request.CWDRel)
+	if err != nil {
+		return nil, err
+	}
+	// Duplicate idempotent requests share one cancellable allocation lane. The
+	// reservation itself is persisted before Bridge work, allowing an
+	// interrupted request to resume with the same Target ID without blocking
+	// unrelated owners or requests.
+	unlock, lockErr := s.acquireOperation(ctx, operationLockKey{scope: "node_open", primary: binding.OwnerKey, secondary: request.ClientRequestID})
+	if lockErr != nil {
+		return projectToolError("NODE_SESSION_OPERATION_FAILED", "Node WorkSession allocation was cancelled", map[string]any{"reason": lockErr.Error()})
+	}
+	defer unlock()
+	session, _, err := s.projects.BeginWorkSession(ctx, binding.OwnerKey, configured.Project.ID, request.ClientRequestID, requestHash, configured.Project.Revision)
+	if err != nil {
+		var conflict *projectstore.WorkSessionRequestConflictError
+		if errors.As(err, &conflict) {
+			return projectToolError(protocol.ErrorRevisionConflict, conflict.Error(), map[string]any{"work_session_id": conflict.WorkSessionID, "client_request_id": conflict.ClientRequestID})
+		}
+		return projectToolError("NODE_SESSION_OPERATION_FAILED", "failed to create Node WorkSession", map[string]any{"reason": err.Error()})
+	}
+	targets, err := s.projects.ListWorkTargets(ctx, binding.OwnerKey, session.ID)
+	if err != nil {
+		return projectToolError("NODE_SESSION_OPERATION_FAILED", "failed to load Node WorkSession Target", map[string]any{"reason": err.Error()})
+	}
+	if len(targets) > 1 {
+		return projectToolError("NODE_SESSION_OPERATION_FAILED", "Node WorkSession contains more than one Target", nil)
+	}
+	if len(targets) == 0 {
+		targetID, idErr := core.NewID("target")
+		if idErr != nil {
+			return projectToolError("NODE_SESSION_OPERATION_FAILED", "failed to allocate Node WorkSession Target", map[string]any{"reason": idErr.Error()})
+		}
+		reserved := s.preparingProjectTarget(ctx, targetID, session, configured.Project, configured.Deployment, request.CWDRel)
+		stored, saveErr := s.projects.PutWorkTarget(ctx, binding.OwnerKey, reserved)
+		if saveErr != nil {
+			return projectToolError("NODE_SESSION_OPERATION_FAILED", "failed to reserve Node WorkSession Target", map[string]any{"reason": saveErr.Error()})
+		}
+		targets = []projectstore.WorkTarget{stored}
+	}
+	if targets[0].Target.Status == protocol.TargetPreparing {
+		target, prepareErr := s.prepareProjectTargetWithID(ctx, targets[0].Target.ID, session, configured.Project, configured.Deployment, request.CWDRel)
+		if prepareErr != nil {
+			return projectToolError("NODE_SESSION_OPERATION_FAILED", "failed to allocate Node WorkSession Target", map[string]any{"reason": prepareErr.Error()})
+		}
+		if _, saveErr := s.projects.PutWorkTarget(ctx, binding.OwnerKey, target); saveErr != nil {
+			return projectToolError("NODE_SESSION_OPERATION_FAILED", "failed to persist Node WorkSession Target", map[string]any{"reason": saveErr.Error()})
+		}
+		targets = []projectstore.WorkTarget{target}
+	}
+	session, err = s.projects.UpdateWorkSessionContext(ctx, binding.OwnerKey, session.ID, configured.Project.Revision, workSessionStatusForTargets(targets), projectSessionContextRevision(configured.Project, targets))
+	if err != nil {
+		return projectToolError("NODE_SESSION_OPERATION_FAILED", "failed to finalize Node WorkSession", map[string]any{"reason": err.Error()})
+	}
+	return s.nodeOpenResult(ctx, binding.OwnerKey, session.ID)
+}
+
+func (s *Server) nodeOpenResult(ctx context.Context, ownerKey, workSessionID string) (map[string]any, error) {
+	session, err := s.projects.GetWorkSession(ctx, ownerKey, workSessionID)
+	if err != nil {
+		return nil, err
+	}
+	project, err := s.projects.GetProject(ctx, session.ProjectID)
+	if err != nil || project.Kind != projectstore.ProjectKindNode {
+		return projectToolError(protocol.ErrorSessionTargetDenied, "WorkSession is not a Node temporary session", nil)
+	}
+	targets, err := s.projects.ListWorkTargets(ctx, ownerKey, session.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(targets) != 1 {
+		return projectToolError("NODE_SESSION_OPERATION_FAILED", "Node WorkSession does not contain exactly one Target", nil)
+	}
+	if err := validateProjectPromptContextBudget(targets); err != nil {
+		return projectToolError(protocol.ErrorProjectPromptTooLarge, "Node WorkSession Prompt exceeds the context budget", map[string]any{"reason": err.Error()})
+	}
+	node, err := s.agentDock.Get(ctx, project.NodeID)
+	if err != nil {
+		return projectToolError("AGENTDOCK_NODE_NOT_FOUND", "AgentDock Node is unavailable", map[string]any{"node_id": project.NodeID})
+	}
+	delivery, err := s.projectContextDeliveryView(ctx, ownerKey, session.ID, "", session.ContextRevision)
+	if err != nil {
+		return projectToolError("NODE_SESSION_OPERATION_FAILED", "failed to read Node Context delivery state", map[string]any{"reason": err.Error()})
+	}
+	result := map[string]any{
+		"work_session_id":  session.ID,
+		"status":           string(session.Status),
+		"context_revision": session.ContextRevision,
+		"delivery":         delivery,
+		"node":             map[string]any{"node_id": node.ID, "name": node.Name, "online": s.agentDockHub.Online(node.ID)},
+		"targets":          []protocol.WorkTarget{targets[0].Target},
+	}
+	if err := validateProjectContextDeliveryEnvelopeForTool("node_open", result); err != nil {
+		return projectToolError(protocol.ErrorProjectPromptTooLarge, "Node Context delivery exceeds the model-visible result budget", map[string]any{"reason": err.Error(), "max_bytes": protocol.MaxProjectContextDeliveryBytes})
+	}
+	return result, nil
 }
 
 func (s *Server) callProjectContext(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -231,10 +367,18 @@ func (s *Server) callProjectContext(ctx context.Context, args map[string]any) (m
 	}
 	result := map[string]any{
 		"work_session_id": workSessionID,
-		"project":         projectProtocolView(project),
 		"deployment":      projectDeploymentView(deployment, effectivePermissions, true, "ready", ""),
 		"target":          stored.Target,
 		"delivery":        delivery,
+	}
+	if project.Kind == projectstore.ProjectKindNode {
+		node, nodeErr := s.agentDock.Get(ctx, project.NodeID)
+		if nodeErr != nil {
+			return projectToolError("AGENTDOCK_NODE_NOT_FOUND", "AgentDock Node is unavailable", map[string]any{"node_id": project.NodeID})
+		}
+		result["node"] = map[string]any{"node_id": node.ID, "name": node.Name, "online": s.agentDockHub.Online(node.ID)}
+	} else {
+		result["project"] = projectProtocolView(project)
 	}
 	if err := validateProjectContextDeliveryEnvelope(result); err != nil {
 		return projectToolError(protocol.ErrorProjectPromptTooLarge, "Project Context delivery exceeds the model-visible result budget", map[string]any{"reason": err.Error(), "max_bytes": protocol.MaxProjectContextDeliveryBytes})
@@ -247,6 +391,10 @@ func (s *Server) prepareProjectTarget(ctx context.Context, session projectstore.
 	if err != nil {
 		return projectstore.WorkTarget{}, err
 	}
+	return s.prepareProjectTargetWithID(ctx, targetID, session, project, deployment, cwdRel)
+}
+
+func (s *Server) preparingProjectTarget(ctx context.Context, targetID string, session projectstore.WorkSession, project projectstore.Project, deployment projectstore.Deployment, cwdRel string) projectstore.WorkTarget {
 	if strings.TrimSpace(cwdRel) == "" {
 		cwdRel = "."
 	}
@@ -254,11 +402,15 @@ func (s *Server) prepareProjectTarget(ctx context.Context, session projectstore.
 	if node, nodeErr := s.agentDock.Get(ctx, deployment.NodeID); nodeErr == nil {
 		effectivePermissions = effectiveProjectPermissions(deployment.Permissions, node.FullAccess)
 	}
-	item := projectstore.WorkTarget{Target: protocol.WorkTarget{
+	return projectstore.WorkTarget{Target: protocol.WorkTarget{
 		ID: targetID, WorkSessionID: session.ID, ProjectID: project.ID, DeploymentID: deployment.ID, NodeID: deployment.NodeID,
 		CWDRel: cwdRel, DeploymentRevision: deployment.DesiredRevision, Status: protocol.TargetPreparing, Permissions: effectivePermissions,
 		Prompt: emptyProjectPrompt(),
 	}}
+}
+
+func (s *Server) prepareProjectTargetWithID(ctx context.Context, targetID string, session projectstore.WorkSession, project projectstore.Project, deployment projectstore.Deployment, cwdRel string) (projectstore.WorkTarget, error) {
+	item := s.preparingProjectTarget(ctx, targetID, session, project, deployment, cwdRel)
 	availability, reason := s.projectDeploymentAvailability(ctx, deployment)
 	if availability != "candidate" {
 		item.Target.Status = protocol.TargetUnavailable
@@ -276,7 +428,7 @@ func (s *Server) prepareProjectTarget(ctx context.Context, session projectstore.
 	item.Target.Prompt = promptResult.Prompt
 	item.Target.SourceProvenance = promptResult.SourceProvenance
 	item.PromptScopes = []protocol.PromptScopeRevision{{Scope: promptResult.CWDRel, PromptRevision: promptResult.Prompt.PromptRevision}}
-	item.Target.ContextRevision = projectTargetContextRevision(project, deployment, effectivePermissions, promptResult.CWDRel, promptResult.Prompt, item.PromptScopes, item.Target.SourceProvenance)
+	item.Target.ContextRevision = projectTargetContextRevision(project, deployment, item.Target.Permissions, promptResult.CWDRel, promptResult.Prompt, item.PromptScopes, item.Target.SourceProvenance)
 	bind := protocol.ProjectTargetBindRequest{
 		WorkSessionID: session.ID, TargetID: item.Target.ID, ProjectID: project.ID, DeploymentID: deployment.ID,
 		CWDRel: item.Target.CWDRel, DeploymentRevision: deployment.AppliedRevision, ContextRevision: item.Target.ContextRevision, PromptScopes: item.PromptScopes,
@@ -490,6 +642,18 @@ func hashProjectOpenRequest(projectID string, targetsProvided bool, targets []pr
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
+func hashNodeOpenRequest(nodeID, cwdRel string) (string, error) {
+	encoded, err := json.Marshal(struct {
+		NodeID string `json:"node_id"`
+		CWDRel string `json:"cwd_rel"`
+	}{NodeID: nodeID, CWDRel: cwdRel})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(encoded)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
 func projectTargetContextRevision(project projectstore.Project, deployment projectstore.Deployment, permissions protocol.DeploymentPermissions, cwdRel string, prompt protocol.ProjectPrompt, scopes []protocol.PromptScopeRevision, sourceProvenance protocol.SourceProvenance) string {
 	material := struct {
 		CombinerVersion    string                         `json:"combiner_version"`
@@ -585,7 +749,11 @@ func validateProjectPromptContextBudget(targets []projectstore.WorkTarget) error
 }
 
 func validateProjectContextDeliveryEnvelope(result map[string]any) error {
-	response, err := gatewayToolResult("project_context", result, nil)
+	return validateProjectContextDeliveryEnvelopeForTool("project_context", result)
+}
+
+func validateProjectContextDeliveryEnvelopeForTool(name string, result map[string]any) error {
+	response, err := gatewayToolResult(name, result, nil)
 	if err != nil {
 		return fmt.Errorf("build Project Context delivery: %w", err)
 	}

@@ -33,6 +33,7 @@ var centralOutputContractCoverageInventory = map[string]centralOutputContractCov
 	"agentdock_context":            {Variants: []string{"success"}},
 	mcpcontract.ToolProjectList:    {Variants: []string{"success"}},
 	mcpcontract.ToolProjectOpen:    {Variants: []string{"success"}},
+	mcpcontract.ToolNodeOpen:       {Variants: []string{"success"}},
 	mcpcontract.ToolProjectContext: {Variants: []string{"success"}},
 	"recall_search":                {Variants: []string{"success"}},
 	"recall_read":                  {Variants: []string{"success"}},

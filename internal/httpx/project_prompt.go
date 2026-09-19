@@ -121,7 +121,7 @@ func (s *Server) projectPromptReadyDeployment(w http.ResponseWriter, r *http.Req
 	}
 	projectID := strings.TrimSpace(r.PathValue("projectID"))
 	deploymentID := strings.TrimSpace(r.PathValue("deploymentID"))
-	if _, err := s.projects.GetProject(r.Context(), projectID); err != nil {
+	if _, err := s.projects.GetUserProject(r.Context(), projectID); err != nil {
 		writeProjectError(w, err)
 		return projectstore.Deployment{}, false
 	}

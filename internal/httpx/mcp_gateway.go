@@ -529,8 +529,8 @@ func nodeInputSchema(schema map[string]any) map[string]any {
 	delete(properties, "node_id")
 	delete(properties, "working_folder")
 	delete(properties, "permissions")
-	properties["work_session_id"] = map[string]any{"type": "string", "description": "Bound Project WorkSession id returned by project_open."}
-	properties["target_id"] = map[string]any{"type": "string", "description": "Bound Project Target id returned by project_open/project_context."}
+	properties["work_session_id"] = map[string]any{"type": "string", "description": "Bound WorkSession id returned by project_open or node_open."}
+	properties["target_id"] = map[string]any{"type": "string", "description": "Bound Target id returned by project_open, node_open, or project_context."}
 	required, _ := cloned["required"].([]any)
 	filtered := make([]any, 0, len(required)+2)
 	for _, value := range required {
@@ -646,6 +646,8 @@ func (s *Server) callNexusTool(ctx context.Context, name string, args map[string
 		return s.callProjectList(ctx)
 	case mcpcontract.ToolProjectOpen:
 		return s.callProjectOpen(ctx, args)
+	case mcpcontract.ToolNodeOpen:
+		return s.callNodeOpen(ctx, args)
 	case mcpcontract.ToolProjectContext:
 		return s.callProjectContext(ctx, args)
 	case "workflow_template_manage":

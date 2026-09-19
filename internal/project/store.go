@@ -14,11 +14,17 @@ import (
 )
 
 var (
-	ErrProjectNotFound    = errors.New("Project 不存在")
-	ErrDeploymentNotFound = errors.New("Deployment 不存在")
-	ErrNodeNotFound       = errors.New("AgentDock Node 不存在")
-	ErrRevisionConflict   = errors.New("revision conflict")
-	ErrDuplicateNode      = errors.New("Project 已关联该节点")
+	ErrProjectNotFound     = errors.New("Project 不存在")
+	ErrNodeSessionNotFound = errors.New("节点临时会话未配置")
+	ErrDeploymentNotFound  = errors.New("Deployment 不存在")
+	ErrNodeNotFound        = errors.New("AgentDock Node 不存在")
+	ErrRevisionConflict    = errors.New("revision conflict")
+	ErrDuplicateNode       = errors.New("Project 已关联该节点")
+)
+
+const (
+	ProjectKindUser = "project"
+	ProjectKindNode = "node"
 )
 
 type RevisionConflictError struct {
@@ -41,11 +47,18 @@ type Project struct {
 	ID                  string       `json:"id"`
 	Name                string       `json:"name"`
 	OrchestrationPolicy string       `json:"orchestration_policy"`
+	Kind                string       `json:"-"`
+	NodeID              string       `json:"-"`
 	Revision            string       `json:"revision"`
 	Enabled             bool         `json:"enabled"`
 	CreatedAt           time.Time    `json:"created_at"`
 	UpdatedAt           time.Time    `json:"updated_at"`
 	Deployments         []Deployment `json:"deployments,omitempty"`
+}
+
+type NodeSession struct {
+	Project    Project    `json:"project"`
+	Deployment Deployment `json:"deployment"`
 }
 
 type Deployment struct {
@@ -118,8 +131,7 @@ func NewStore(db *sql.DB) (*Store, error) {
 }
 
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, orchestration_policy, revision, enabled, created_at, updated_at
-		FROM projects ORDER BY name COLLATE NOCASE, id`)
+	rows, err := s.db.QueryContext(ctx, projectSelect+` WHERE kind = ? ORDER BY name COLLATE NOCASE, id`, ProjectKindUser)
 	if err != nil {
 		return nil, fmt.Errorf("列出 Projects: %w", err)
 	}
@@ -143,7 +155,27 @@ func (s *Store) GetProject(ctx context.Context, id string) (Project, error) {
 	if id == "" {
 		return Project{}, invalid("Project ID 不能为空")
 	}
-	item, err := scanProject(s.db.QueryRowContext(ctx, `SELECT id, name, orchestration_policy, revision, enabled, created_at, updated_at FROM projects WHERE id = ?`, id))
+	item, err := scanProject(s.db.QueryRowContext(ctx, projectSelect+` WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Project{}, ErrProjectNotFound
+	}
+	if err != nil {
+		return Project{}, err
+	}
+	deployments, err := s.ListDeployments(ctx, id)
+	if err != nil {
+		return Project{}, err
+	}
+	item.Deployments = deployments
+	return item, nil
+}
+
+func (s *Store) GetUserProject(ctx context.Context, id string) (Project, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Project{}, invalid("Project ID 不能为空")
+	}
+	item, err := scanProject(s.db.QueryRowContext(ctx, projectSelect+` WHERE id = ? AND kind = ?`, id, ProjectKindUser))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Project{}, ErrProjectNotFound
 	}
@@ -168,12 +200,155 @@ func (s *Store) CreateProject(ctx context.Context, input CreateProjectInput) (Pr
 		return Project{}, err
 	}
 	now := s.now().UTC()
-	_, err = s.db.ExecContext(ctx, `INSERT INTO projects(id, name, orchestration_policy, revision, enabled, created_at, updated_at)
-		VALUES(?, ?, ?, 1, ?, ?, ?)`, id, name, policy, boolInt(input.Enabled), formatTime(now), formatTime(now))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO projects(id, name, orchestration_policy, kind, node_id, revision, enabled, created_at, updated_at)
+		VALUES(?, ?, ?, 'project', NULL, 1, ?, ?, ?)`, id, name, policy, boolInt(input.Enabled), formatTime(now), formatTime(now))
 	if err != nil {
 		return Project{}, fmt.Errorf("创建 Project: %w", err)
 	}
 	return s.GetProject(ctx, id)
+}
+
+func (s *Store) GetNodeSession(ctx context.Context, nodeID string) (NodeSession, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return NodeSession{}, invalid("node_id 不能为空")
+	}
+	item, err := scanProject(s.db.QueryRowContext(ctx, projectSelect+` WHERE kind = ? AND node_id = ?`, ProjectKindNode, nodeID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return NodeSession{}, ErrNodeSessionNotFound
+	}
+	if err != nil {
+		return NodeSession{}, fmt.Errorf("读取节点临时会话容器: %w", err)
+	}
+	deployments, err := s.ListDeployments(ctx, item.ID)
+	if err != nil {
+		return NodeSession{}, err
+	}
+	if len(deployments) != 1 || deployments[0].NodeID != nodeID || deployments[0].WorkingFolder != "" {
+		return NodeSession{}, fmt.Errorf("节点临时会话容器 %s 的 Deployment 不完整", item.ID)
+	}
+	item.Deployments = deployments
+	return NodeSession{Project: item, Deployment: deployments[0]}, nil
+}
+
+// PutNodeSessionConfiguration 在一个事务中建立系统容器和唯一 Deployment。
+// 内部 Project 只复用既有 Target/回执链路，不能通过普通 Project API 创建或改变工作目录。
+func (s *Store) PutNodeSessionConfiguration(ctx context.Context, nodeID string, enabled bool, permissions protocol.DeploymentPermissions) (NodeSession, bool, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	permissions.FullAccess = false
+	if nodeID == "" {
+		return NodeSession{}, false, invalid("node_id 不能为空")
+	}
+	if err := permissions.Validate(); err != nil {
+		return NodeSession{}, false, invalid("permissions 无效: " + err.Error())
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return NodeSession{}, false, fmt.Errorf("开始配置节点临时会话事务: %w", err)
+	}
+	defer tx.Rollback()
+	var nodeName string
+	if err := tx.QueryRowContext(ctx, `SELECT name FROM agentdock_devices WHERE id = ?`, nodeID).Scan(&nodeName); errors.Is(err, sql.ErrNoRows) {
+		return NodeSession{}, false, ErrNodeNotFound
+	} else if err != nil {
+		return NodeSession{}, false, fmt.Errorf("读取节点临时会话 Node: %w", err)
+	}
+
+	projectID, err := core.NewID("project")
+	if err != nil {
+		return NodeSession{}, false, err
+	}
+	now := formatTime(s.now().UTC())
+	inserted, err := tx.ExecContext(ctx, `INSERT INTO projects(id, name, orchestration_policy, kind, node_id, revision, enabled, created_at, updated_at)
+		VALUES(?, ?, '', 'node', ?, 1, 1, ?, ?) ON CONFLICT DO NOTHING`, projectID, nodeName, nodeID, now, now)
+	if err != nil {
+		return NodeSession{}, false, fmt.Errorf("创建节点临时会话容器: %w", err)
+	}
+	rows, err := inserted.RowsAffected()
+	if err != nil {
+		return NodeSession{}, false, fmt.Errorf("读取节点临时会话容器创建结果: %w", err)
+	}
+	created := rows > 0
+	projectItem, err := scanProject(tx.QueryRowContext(ctx, projectSelect+` WHERE kind = ? AND node_id = ?`, ProjectKindNode, nodeID))
+	if err != nil {
+		return NodeSession{}, false, fmt.Errorf("读取节点临时会话容器: %w", err)
+	}
+	if projectItem.Name != nodeName {
+		if _, err := tx.ExecContext(ctx, `UPDATE projects SET name = ?, updated_at = ? WHERE id = ?`, nodeName, formatTime(s.now().UTC()), projectItem.ID); err != nil {
+			return NodeSession{}, false, fmt.Errorf("同步节点临时会话名称: %w", err)
+		}
+		projectItem.Name = nodeName
+	}
+
+	deployment, err := scanDeployment(tx.QueryRowContext(ctx, deploymentSelect+` WHERE project_id = ? AND node_id = ?`, projectItem.ID, nodeID))
+	if errors.Is(err, sql.ErrNoRows) {
+		deploymentID, idErr := core.NewID("deployment")
+		if idErr != nil {
+			return NodeSession{}, false, idErr
+		}
+		now := formatTime(s.now().UTC())
+		if _, err = tx.ExecContext(ctx, `INSERT INTO project_deployments(
+			id, project_id, node_id, working_folder, role, purpose, files_permission,
+			shell_enabled, browser_enabled, dynamic_mcp_enabled, acp_enabled,
+			desired_revision, applied_revision, enabled, apply_status, last_error, created_at, updated_at
+		) VALUES(?, ?, ?, '', '', '', ?, ?, ?, ?, ?, 1, 0, ?, 'pending', '', ?, ?)`,
+			deploymentID, projectItem.ID, nodeID, string(permissions.Files), boolInt(permissions.Shell), boolInt(permissions.Browser),
+			boolInt(permissions.DynamicMCP), boolInt(permissions.ACP), boolInt(enabled), now, now); err != nil {
+			return NodeSession{}, false, fmt.Errorf("创建节点临时会话 Deployment: %w", err)
+		}
+		deployment, err = scanDeployment(tx.QueryRowContext(ctx, deploymentSelect+` WHERE id = ?`, deploymentID))
+		created = true
+	} else if err == nil {
+		if deployment.WorkingFolder != "" || deployment.ProjectID != projectItem.ID {
+			return NodeSession{}, false, fmt.Errorf("节点临时会话 Deployment %s 已偏离系统约束", deployment.ID)
+		}
+		if deployment.Enabled != enabled || deployment.Permissions != permissions {
+			_, err = tx.ExecContext(ctx, `UPDATE project_deployments SET
+				files_permission = ?, shell_enabled = ?, browser_enabled = ?, dynamic_mcp_enabled = ?, acp_enabled = ?,
+				desired_revision = desired_revision + 1, enabled = ?, apply_status = 'pending', last_error = '', updated_at = ?
+				WHERE id = ?`, string(permissions.Files), boolInt(permissions.Shell), boolInt(permissions.Browser),
+				boolInt(permissions.DynamicMCP), boolInt(permissions.ACP), boolInt(enabled), formatTime(s.now().UTC()), deployment.ID)
+			if err != nil {
+				return NodeSession{}, false, fmt.Errorf("更新节点临时会话 Deployment: %w", err)
+			}
+			deployment, err = scanDeployment(tx.QueryRowContext(ctx, deploymentSelect+` WHERE id = ?`, deployment.ID))
+		}
+	}
+	if err != nil {
+		return NodeSession{}, false, fmt.Errorf("读取节点临时会话 Deployment: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return NodeSession{}, false, fmt.Errorf("提交节点临时会话配置: %w", err)
+	}
+	return NodeSession{Project: projectItem, Deployment: deployment}, created, nil
+}
+
+func (s *Store) DeleteNodeSession(ctx context.Context, nodeID string) error {
+	item, err := s.GetNodeSession(ctx, nodeID)
+	if errors.Is(err, ErrNodeSessionNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开始删除节点临时会话事务: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM command_source_receipts WHERE work_session_id IN (SELECT id FROM work_sessions WHERE project_id = ?)`, item.Project.ID); err != nil {
+		return fmt.Errorf("清理节点临时会话命令回执: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM work_sessions WHERE project_id = ?`, item.Project.ID); err != nil {
+		return fmt.Errorf("清理节点临时会话 WorkSessions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id = ? AND kind = 'node'`, item.Project.ID); err != nil {
+		return fmt.Errorf("删除节点临时会话容器: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交删除节点临时会话: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) UpdateProject(ctx context.Context, id string, input UpdateProjectInput) (Project, error) {
@@ -276,7 +451,7 @@ func (s *Store) CreateDeployment(ctx context.Context, input CreateDeploymentInpu
 	var projectExists, nodeExists int
 	var nodeOS string
 	if err := s.db.QueryRowContext(ctx, `SELECT
-		EXISTS(SELECT 1 FROM projects WHERE id = ?),
+		EXISTS(SELECT 1 FROM projects WHERE id = ? AND kind = 'project'),
 		EXISTS(SELECT 1 FROM agentdock_devices WHERE id = ?),
 		COALESCE((SELECT os FROM agentdock_devices WHERE id = ?), '')`, projectID, nodeID, nodeID).Scan(&projectExists, &nodeExists, &nodeOS); err != nil {
 		return Deployment{}, fmt.Errorf("校验 Deployment 关联: %w", err)
@@ -523,6 +698,8 @@ const deploymentSelect = `SELECT id, project_id, node_id, working_folder, role, 
 	shell_enabled, browser_enabled, dynamic_mcp_enabled, acp_enabled, desired_revision, applied_revision,
 	enabled, apply_status, last_error, created_at, updated_at FROM project_deployments`
 
+const projectSelect = `SELECT id, name, orchestration_policy, kind, COALESCE(node_id, ''), revision, enabled, created_at, updated_at FROM projects`
+
 func listDeploymentsDB(ctx context.Context, db core.DBTX, projectID string) ([]Deployment, error) {
 	rows, err := db.QueryContext(ctx, deploymentSelect+` WHERE project_id = ? ORDER BY id`, strings.TrimSpace(projectID))
 	if err != nil {
@@ -553,7 +730,7 @@ func scanProject(row scanner) (Project, error) {
 	var item Project
 	var revision, enabled int
 	var created, updated string
-	if err := row.Scan(&item.ID, &item.Name, &item.OrchestrationPolicy, &revision, &enabled, &created, &updated); err != nil {
+	if err := row.Scan(&item.ID, &item.Name, &item.OrchestrationPolicy, &item.Kind, &item.NodeID, &revision, &enabled, &created, &updated); err != nil {
 		return Project{}, err
 	}
 	item.Revision = revisionString(revision)

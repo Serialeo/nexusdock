@@ -86,6 +86,10 @@ func run(args []string) error {
 	if cfg.MCPAppsEnabled, _, err = mcpSettings.Load(ctx); err != nil {
 		return fmt.Errorf("load MCP settings: %w", err)
 	}
+	checkpointSettings, err := settings.NewCheckpointStore(controlDB)
+	if err != nil {
+		return fmt.Errorf("initialize checkpoint prompt settings: %w", err)
+	}
 	agentDockNodes, err := agentdock.NewStore(controlDB)
 	if err != nil {
 		return fmt.Errorf("initialize AgentDock node store: %w", err)
@@ -126,6 +130,7 @@ func run(args []string) error {
 		httpx.WithEmbeddingService(embeddingService),
 		httpx.WithRuntimeSettings(runtimeSettings),
 		httpx.WithMCPSettings(mcpSettings),
+		httpx.WithCheckpointSettings(checkpointSettings),
 		httpx.WithMCPTokenStore(mcpTokenStore),
 		httpx.WithPrivateNotes(privateNoteStore),
 	)
