@@ -192,7 +192,7 @@ func nodeMCPToolWithApps(descriptor agentdock.ToolDescriptor, mcpAppsEnabled boo
 		return nil
 	}
 	tool := &mcpsdk.Tool{
-		Name: descriptor.Name, Title: descriptor.Title, Description: mcpresult.Description(descriptor.Name, descriptor.Description) + " Route through work_session_id and target_id returned by project_open, node_open, or project_context.",
+		Name: descriptor.Name, Title: descriptor.Title, Description: mcpresult.Description(descriptor.Name, descriptor.Description) + " Use work_session_id and target_id from node_open by default, or project_open for a user-specified Project.",
 		InputSchema: nodeInputSchema(descriptor.InputSchema), OutputSchema: nodeOutputSchema(descriptor.Name, descriptor.OutputSchema),
 	}
 	if len(descriptor.Annotations) > 0 {
@@ -461,8 +461,8 @@ func nodeInputSchema(schema map[string]any) map[string]any {
 	delete(properties, "node_id")
 	delete(properties, "working_folder")
 	delete(properties, "permissions")
-	properties["work_session_id"] = map[string]any{"type": "string", "description": "Bound WorkSession id returned by project_open or node_open."}
-	properties["target_id"] = map[string]any{"type": "string", "description": "Bound Target id returned by project_open, node_open, or project_context."}
+	properties["work_session_id"] = map[string]any{"type": "string", "description": "Bound WorkSession id from node_open by default, or project_open for a user-specified Project."}
+	properties["target_id"] = map[string]any{"type": "string", "description": "Target id in that WorkSession returned by node_open, project_open, or project_context."}
 	required, _ := cloned["required"].([]any)
 	filtered := make([]any, 0, len(required)+2)
 	for _, value := range required {

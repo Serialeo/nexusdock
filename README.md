@@ -164,6 +164,8 @@ agentdock nexus pair --endpoint https://nexus.example.com --code pair_xxx
 
 ### Project 工作上下文与权限
 
+未指定 Project 时，MCP Host 使用节点临时会话：从 `agentdock_context` 获取节点 ID，用 `node_open` 创建会话，再通过返回的 `work_session_id` / `target_id` 调用节点工具。只有用户明确指定了 Project，才使用 `project_open`；`project_list` 用于用户主动查找项目。`project_context` 可以刷新两类已绑定会话，不改变会话类型。
+
 每个 Deployment 固定绑定目标 Node，并可选保存 `working_folder`、自由文本 `role` / `purpose` 和细粒度能力。`working_folder` 只负责默认 cwd、Project Prompt 搜索边界与源码 provenance 根，不是 OS 沙箱；它可以留空，留空时 Target 的相对路径/默认命令目录从该 Node 的 AgentDock 默认目录开始，同时不自动发现任何 Project `AGENTS.md`。
 
 Node 管理页提供独立的 **Full Access** 开关。开启后，该 Node 的 Project Target 可使用节点已经暴露的全部执行能力，仍受 AgentDock 服务进程真实 OS 权限约束；Full Access 与 Project Folder 正交，不会把文件/命令限制在 `working_folder` 内，也不会扩大 Project Prompt 的自动发现范围。关闭 Full Access 后，执行回到各 Deployment 保存的 files / shell / browser / dynamic MCP / ACP 细粒度权限。

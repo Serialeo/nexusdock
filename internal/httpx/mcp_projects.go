@@ -557,41 +557,13 @@ func (s *Server) projectDeploymentAvailability(ctx context.Context, deployment p
 	if s.agentDockHub == nil || !s.agentDockHub.Online(deployment.NodeID) {
 		return "offline", "AgentDock node is offline"
 	}
-	node, err := s.currentAgentDockNode(ctx, deployment.NodeID)
+	_, err := s.currentAgentDockNode(ctx, deployment.NodeID)
 	if err != nil {
 		return "node_unavailable", "AgentDock node is unavailable"
 	}
-	if !deploymentHasUsableCapability(effectiveProjectPermissions(deployment.Permissions, node.FullAccess), node.Capabilities) {
-		return "capability_denied", "Deployment has no usable allowed capability on this node"
-	}
+	// 会话绑定不依赖某类执行能力；task/checkpoint 等工具不需要文件或 Shell 权限。
+	// 具体工具在可信 Target 上逐次授权，不能用固定能力清单提前挡住当前节点的新工具。
 	return "candidate", ""
-}
-
-func deploymentHasUsableCapability(permissions protocol.DeploymentPermissions, capabilities []string) bool {
-	if permissions.FullAccess {
-		for _, capability := range []string{"read_file", "exec_command", "browser_session", "mcp_manage", "acp_session"} {
-			if containsString(capabilities, capability) {
-				return true
-			}
-		}
-		return false
-	}
-	if permissions.Files != protocol.FileCapabilityNone && containsString(capabilities, "read_file") {
-		return true
-	}
-	if permissions.Shell && containsString(capabilities, "exec_command") {
-		return true
-	}
-	if permissions.Browser && containsString(capabilities, "browser_session") {
-		return true
-	}
-	if permissions.DynamicMCP && containsString(capabilities, "mcp_manage") {
-		return true
-	}
-	if permissions.ACP && containsString(capabilities, "acp_session") {
-		return true
-	}
-	return false
 }
 
 func normalizeProjectOpenSelections(input []projectOpenTargetSelection, provided bool, deployments []projectstore.Deployment) ([]projectOpenTargetSelection, error) {

@@ -20,11 +20,11 @@ func nexusToolDefinitions() []*mcpsdk.Tool {
 
 func nexusToolDefinitionsWithApps(mcpAppsEnabled bool) []*mcpsdk.Tool {
 	presentations := []centralToolPresentation{
-		{name: mcpcontract.ToolAgentDockContext, title: "AgentDock fleet context", description: "Return one combined context for all enabled AgentDock nodes, including node-local capabilities and Nexus-owned shared Workflow and Recall context.", uiURI: protocol.ContextUIResourceURI},
-		{name: mcpcontract.ToolProjectList, title: "List Projects", description: "List enabled Nexus Projects and lightweight Deployment availability without executing on any AgentDock node."},
-		{name: mcpcontract.ToolProjectOpen, title: "Open Project", description: "Create or idempotently resolve a Project WorkSession and prepare authorized Deployment Targets. Preparation never implies automatic execution."},
-		{name: mcpcontract.ToolNodeOpen, title: "Open Node session", description: "Create or idempotently resolve a temporary WorkSession for one Node using the permissions explicitly configured in Nexus settings."},
-		{name: mcpcontract.ToolProjectContext, title: "Refresh Project context", description: "Refresh one bound WorkSession Target cwd and complete applicable Project Prompt before further execution."},
+		{name: mcpcontract.ToolAgentDockContext, title: "AgentDock fleet context", description: "Return context for enabled current-version AgentDock nodes, including node-local capabilities and Nexus-owned shared Workflow and Recall context. Without a user-specified Project, enter the chosen node through node_open using its node_id.", uiURI: protocol.ContextUIResourceURI},
+		{name: mcpcontract.ToolProjectList, title: "List Projects", description: "List enabled Nexus Projects and lightweight Deployment availability for an explicit Project discovery request."},
+		{name: mcpcontract.ToolProjectOpen, title: "Open Project", description: "Create or idempotently resolve a WorkSession for a user-specified Project and prepare authorized Deployment Targets. Without a user-specified Project, use node_open. Preparation never implies automatic execution."},
+		{name: mcpcontract.ToolNodeOpen, title: "Open Node session", description: "Default work entry when the user has not specified a Project. Create or idempotently resolve a temporary WorkSession on the chosen node using its configured permissions. Use the returned work_session_id and target_id for node tools, including task_manage and checkpoints."},
+		{name: mcpcontract.ToolProjectContext, title: "Refresh WorkSession context", description: "Refresh an existing bound Target from node_open or project_open, including its cwd and any applicable Project Prompt. A node temporary session stays on the same node."},
 		{name: mcpcontract.ToolRecallSearch, title: "Search NexusDock Recall", description: "Search Markdown documents and cards with lexical retrieval and optional semantic enhancement when embeddings are available."},
 		{name: mcpcontract.ToolRecallRead, title: "Read NexusDock Recall entry", description: "Read one central Recall entry by path."},
 		{name: mcpcontract.ToolRecallWrite, title: "Write NexusDock Recall entry", description: "Plan, create, replace, append, patch, update facts, diff, or delete central Recall content. Target and action are explicit request fields.", uiURI: protocol.RecallUIResourceURI},
