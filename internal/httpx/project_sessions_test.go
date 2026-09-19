@@ -50,7 +50,7 @@ func TestProjectSessionHTTPIsProjectScopedAndDoesNotExposeOwnerBinding(t *testin
 		t.Fatalf("session list status=%d body=%s", listed.Code, listed.Body.String())
 	}
 	body := listed.Body.String()
-	if !strings.Contains(body, session.ID) || !strings.Contains(body, `"status":"returned"`) || !strings.Contains(body, `"context_revision":"sha256:session-a"`) || !strings.Contains(body, `"returned_at"`) || strings.Contains(body, other.ID) || strings.Contains(body, "mcp:secret-owner-a") || strings.Contains(body, "sha256:secret-request") {
+	if !strings.Contains(body, session.ID) || !strings.Contains(body, `"status":"returned"`) || !strings.Contains(body, `"returned_at"`) || strings.Contains(body, other.ID) || strings.Contains(body, "mcp:secret-owner-a") || strings.Contains(body, "request-first") || strings.Contains(body, "sha256:") || strings.Contains(body, `"client_request_id"`) || strings.Contains(body, `"project_revision"`) || strings.Contains(body, `"context_revision"`) {
 		t.Fatalf("Project session list leaked, crossed scope, or lost delivery evidence: %s", body)
 	}
 
@@ -59,7 +59,7 @@ func TestProjectSessionHTTPIsProjectScopedAndDoesNotExposeOwnerBinding(t *testin
 		t.Fatalf("session detail status=%d body=%s", detail.Code, detail.Body.String())
 	}
 	detailBody := detail.Body.String()
-	if !strings.Contains(detailBody, target.Target.ID) || !strings.Contains(detailBody, `"cwd_rel":"backend"`) || !strings.Contains(detailBody, `"prompt_revision":"sha256:prompt-a"`) || !strings.Contains(detailBody, `"status":"host_consumed"`) || !strings.Contains(detailBody, `"host_consumed_at"`) || strings.Contains(detailBody, "mcp:secret-owner-a") || strings.Contains(detailBody, "sha256:secret-request") {
+	if !strings.Contains(detailBody, target.Target.ID) || !strings.Contains(detailBody, `"cwd_rel":"backend"`) || !strings.Contains(detailBody, `"path":"AGENTS.md"`) || !strings.Contains(detailBody, `"bytes":5`) || !strings.Contains(detailBody, `"status":"host_consumed"`) || !strings.Contains(detailBody, `"host_consumed_at"`) || strings.Contains(detailBody, "mcp:secret-owner-a") || strings.Contains(detailBody, "request-first") || strings.Contains(detailBody, "sha256:") || strings.Contains(detailBody, `"content":"rules"`) || strings.Contains(detailBody, `"prompt_revision"`) || strings.Contains(detailBody, `"prompt_scopes"`) || strings.Contains(detailBody, `"context_revision"`) || strings.Contains(detailBody, `"deployment_revision"`) || strings.Contains(detailBody, `"source_provenance"`) {
 		t.Fatalf("Project session detail = %s", detailBody)
 	}
 

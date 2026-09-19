@@ -13,6 +13,7 @@ import (
 
 	"github.com/Serialeo/agentdock-protocol/mcpcontract"
 	"github.com/uvwt/nexusdock/internal/agentdock"
+	"github.com/uvwt/nexusdock/internal/mcpresult"
 )
 
 const maxToolContractDifferences = 5
@@ -465,6 +466,9 @@ func mergeFleetToolDescriptors(descriptors []agentdock.ToolDescriptor) (agentdoc
 		}
 		acceptedHashes = append(acceptedHashes, hash)
 	}
+	// Fleet 合并模型可见输出，但 accepted hashes 始终来自原始节点契约。
+	// 这样裁剪已知展示元数据不会阻断滚动升级，也不会放宽入参或权限校验。
+	merged.OutputSchema = mcpresult.Schema(merged.Name, merged.OutputSchema)
 	mergedExecution, _ := executionToolMeta(merged.Meta) // 上面的 hash 已校验每个 descriptor。
 	for _, descriptor := range descriptors[1:] {
 		nodeExecution, _ := executionToolMeta(descriptor.Meta)
@@ -475,7 +479,7 @@ func mergeFleetToolDescriptors(descriptors []agentdock.ToolDescriptor) (agentdoc
 		if err != nil {
 			return agentdock.ToolDescriptor{}, nil, err
 		}
-		merged.OutputSchema, err = mergeSchemaMaps("outputSchema", merged.OutputSchema, descriptor.OutputSchema)
+		merged.OutputSchema, err = mergeSchemaMaps("outputSchema", merged.OutputSchema, mcpresult.Schema(descriptor.Name, descriptor.OutputSchema))
 		if err != nil {
 			return agentdock.ToolDescriptor{}, nil, err
 		}

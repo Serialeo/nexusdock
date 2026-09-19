@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import pathlib
 import re
 import sys
@@ -52,7 +54,17 @@ FORBIDDEN_PATH_PREFIXES = (
     "/v1/events",
     "/v1/schedules",
 )
-FORBIDDEN_FIELDS = {"recall_root"}
+FORBIDDEN_FIELDS = {
+    "recall_root",
+    "sha256",
+    "expected_sha256",
+    "tool_contract_hash",
+    "prompt_revision",
+    "context_revision",
+    "deployment_revision",
+    "arguments_digest",
+    "digest",
+}
 FORBIDDEN_ERROR_CODES = {
     "COMMAND_EXPIRED",
     "DIRECT_INSTRUCTIONS_REVISION_CONFLICT",
@@ -504,6 +516,27 @@ def validate_error_code_catalog(errors: list[str]) -> None:
         errors.append(f"retired public error code remains in catalog: {code}")
 
 
+def validate_mcp_model_result_contract(errors: list[str]) -> None:
+    policy = current_openapi().get("x-mcp-model-result")
+    if not isinstance(policy, dict):
+        errors.append("generated MCP model result policy is missing")
+        return
+    try:
+        result = subprocess.run(
+            ["go", "run", "./scripts/check-model-result-contract"],
+            input=json.dumps(policy, ensure_ascii=False),
+            text=True,
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        errors.append(f"unable to execute MCP model contract checker: {exc}")
+        return
+    if result.returncode:
+        errors.append(f"MCP model result contract drift: {result.stderr.strip()}")
+
+
 def main() -> int:
     errors: list[str] = []
     validate_openapi(errors)
@@ -513,6 +546,7 @@ def main() -> int:
     validate_runtime_task_pagination(errors)
     validate_retired_contract_dirs(errors)
     validate_error_code_catalog(errors)
+    validate_mcp_model_result_contract(errors)
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)

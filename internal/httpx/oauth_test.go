@@ -61,6 +61,46 @@ func TestMCPAccessAdvertisesOAuthDiscovery(t *testing.T) {
 	}
 }
 
+func TestOAuthPublicURLOverridesRequestAndForwardedOrigin(t *testing.T) {
+	server, _ := newOAuthHTTPTestServer(t)
+	server.mu.Lock()
+	server.cfg.PublicURL = "https://public.example/"
+	server.cfg.TrustedProxies = []string{"127.0.0.1"}
+	server.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "http://internal.example:18777/mcp", strings.NewReader(`{}`))
+	req.RemoteAddr = "127.0.0.1:43210"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "http")
+	req.Header.Set("X-Forwarded-Host", "forwarded.example")
+	if got := server.oauthIssuer(req); got != "https://public.example" {
+		t.Fatalf("oauth issuer = %q, want configured public origin", got)
+	}
+	if got := server.oauthResource(req); got != "https://public.example/mcp" {
+		t.Fatalf("oauth resource = %q, want configured public MCP resource", got)
+	}
+
+	challenge := httptest.NewRecorder()
+	server.Handler().ServeHTTP(challenge, req)
+	if challenge.Code != http.StatusUnauthorized {
+		t.Fatalf("challenge status=%d body=%s", challenge.Code, challenge.Body.String())
+	}
+	wantChallenge := `Bearer resource_metadata="https://public.example/.well-known/oauth-protected-resource/mcp"`
+	if got := challenge.Header().Get("WWW-Authenticate"); got != wantChallenge {
+		t.Fatalf("WWW-Authenticate=%q want=%q", got, wantChallenge)
+	}
+
+	metadataReq := httptest.NewRequest(http.MethodGet, "http://internal.example:18777/.well-known/oauth-protected-resource/mcp", nil)
+	metadataReq.RemoteAddr = "127.0.0.1:43210"
+	metadataReq.Header.Set("X-Forwarded-Proto", "http")
+	metadataReq.Header.Set("X-Forwarded-Host", "forwarded.example")
+	metadata := httptest.NewRecorder()
+	server.Handler().ServeHTTP(metadata, metadataReq)
+	if metadata.Code != http.StatusOK || !strings.Contains(metadata.Body.String(), `"resource":"https://public.example/mcp"`) {
+		t.Fatalf("metadata status=%d body=%s", metadata.Code, metadata.Body.String())
+	}
+}
+
 func TestOAuthHTTPAuthorizationCodeFlowAndMCPIsolation(t *testing.T) {
 	server, authService := newOAuthHTTPTestServer(t)
 	handler := server.Handler()

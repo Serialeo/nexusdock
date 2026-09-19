@@ -13,6 +13,7 @@ import (
 	"github.com/Serialeo/agentdock-protocol/mcpapps"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/uvwt/nexusdock/internal/agentdock"
+	"github.com/uvwt/nexusdock/internal/mcpresult"
 )
 
 type nexusOwnedMCPApp struct {
@@ -165,7 +166,7 @@ func (s *Server) readPublishedMCPAppResource(ctx context.Context, uri string) (*
 }
 
 func nexusOwnedMCPAppReadResult(app nexusOwnedMCPApp, publicURL string) *mcpsdk.ReadResourceResult {
-	html := mcpapps.HTML(app.View, app.Title)
+	html := mcpresult.WidgetHTML(app.View, app.Title)
 	if app.URI == protocol.WorkContinuationUIResourceURI {
 		html = mcpapps.ContinuationHTML()
 	}
@@ -254,6 +255,7 @@ func decodeNodeMCPAppResource(uri string, result map[string]any, publicURL strin
 			return nil, fmt.Errorf("节点 MCP App resource %s 返回了无效内容", uri)
 		}
 		// Resource 由 Nexus 对外提供，不能沿用节点域；组件必须使用 Nexus 自己的唯一公网 origin。
+		content.Text = mcpresult.AdaptWidgetHTML(content.Text)
 		content.Meta = nexusMCPAppResourceMeta(publicURL)
 	}
 	return &read, nil

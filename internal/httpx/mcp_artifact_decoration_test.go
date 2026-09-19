@@ -130,6 +130,9 @@ func TestCallNodeToolKeepsSuccessWhenArtifactDecorationFails(t *testing.T) {
 	if _, exists := structured["url"]; exists {
 		t.Fatalf("failed decoration unexpectedly added URL: %#v", structured)
 	}
+	if _, exists := structured["sha256"]; exists {
+		t.Fatalf("Artifact result exposed checksum after decoration: %#v", structured)
+	}
 	if err := <-serveDone; err != nil {
 		t.Fatal(err)
 	}

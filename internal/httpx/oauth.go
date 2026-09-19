@@ -436,6 +436,12 @@ func (s *Server) parseOAuthAuthorizationRequest(r *http.Request, values url.Valu
 }
 
 func (s *Server) oauthIssuer(r *http.Request) string {
+	s.mu.RLock()
+	publicURL := strings.TrimRight(strings.TrimSpace(s.cfg.PublicURL), "/")
+	s.mu.RUnlock()
+	if publicURL != "" {
+		return publicURL
+	}
 	scheme := "http"
 	host := r.Host
 	if r.TLS != nil {

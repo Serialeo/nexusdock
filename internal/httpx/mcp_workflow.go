@@ -66,7 +66,7 @@ func (s *Server) callWorkflowTemplateManage(ctx context.Context, args map[string
 			return nil, err
 		}
 		return map[string]any{
-			"ok": true, "action": action, "template": template,
+			"ok": true, "action": action, "template": workflowTemplatePublicView(template),
 			"template_summary": s.workflowTemplateSummary(template), "source": "nexus-registry",
 		}, nil
 
@@ -84,7 +84,7 @@ func (s *Server) callWorkflowTemplateManage(ctx context.Context, args map[string
 			if err != nil {
 				return nil, err
 			}
-			templates = append(templates, template)
+			templates = append(templates, workflowTemplatePublicView(template))
 		}
 		return map[string]any{
 			"ok": true, "action": action, "templates": templates, "count": len(templates),
@@ -222,7 +222,7 @@ func (s *Server) workflowTemplateVectorIndexResult() (map[string]any, error) {
 	return map[string]any{
 		"ok": true, "available": true, "source": "nexus-registry",
 		"file_name": "vector-index.json", "path": "workflow-templates/vector-index.json",
-		"size_bytes": fileSize(info), "updated_at": modTime(info), "content": string(data),
+		"size_bytes": fileSize(info), "updated_at": modTime(info),
 		"vector_index_status": "ready", "vector_index_items": len(idx.Documents),
 		"embedding_model": idx.Model, "dimension": idx.Dimension,
 	}, nil

@@ -4,6 +4,7 @@ import (
 	protocol "github.com/Serialeo/agentdock-protocol"
 	mcpcontract "github.com/Serialeo/agentdock-protocol/mcpcontract"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/uvwt/nexusdock/internal/mcpresult"
 )
 
 type centralToolPresentation struct {
@@ -65,7 +66,7 @@ func canonicalCentralToolWithApps(presentation centralToolPresentation, mcpAppsE
 		Title:        presentation.title,
 		Description:  presentation.description,
 		InputSchema:  input,
-		OutputSchema: output,
+		OutputSchema: mcpresult.Schema(presentation.name, output),
 		Annotations:  canonicalCentralAnnotations(annotations),
 	}
 	if mcpAppsEnabled && presentation.uiURI != "" {

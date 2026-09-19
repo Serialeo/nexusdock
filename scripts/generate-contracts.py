@@ -6,6 +6,25 @@ from __future__ import annotations
 from typing import Any
 
 
+def build_mcp_result_contract() -> dict[str, Any]:
+    """MCP 模型结果边界，不改变 REST 或私有 Bridge/Journal 的数据契约。"""
+    return {
+        "canonical_field": "structuredContent",
+        "text_summary_max_runes": 256,
+        "project_delivery_meta_key": "io.nexusdock/project-context-delivery",
+        "examples": [
+            {"tool": "exec_command", "input": {"exit_code": 0, "stdout": "done", "stderr": "", "command_ok": True, "status": "exited", "event_id": "trace"}, "output": {"exit_code": 0, "stdout": "done"}},
+            {"tool": "exec_command", "input": {"status": "running", "session_id": "live", "observe_after_ms": 1000}, "output": {"status": "running", "session_id": "live"}},
+            {"tool": "read_file", "input": {"path": "a.txt", "content": "data", "encoding": "utf-8", "size_bytes": 4, "truncated": False}, "output": {"path": "a.txt", "content": "data"}},
+            {"tool": "list_dir", "input": {"path": ".", "entries": [{"path": "a", "name": "a", "type": "file", "size_bytes": 4, "is_hidden": False, "modified": "date"}], "truncated": False, "partial": False, "skipped_paths": []}, "output": {"path": ".", "entries": [{"path": "a", "type": "file"}]}},
+            {"tool": "search_text", "input": {"query": "x", "engine": "rg", "matches": [], "total_matches": 0, "truncated": False}, "output": {"matches": []}},
+            {"tool": "task_manage", "input": {"action": "list", "tasks": [], "count": 0, "state_dir": "private", "checkpoint_policy": {"rules": ["static"]}}, "output": {"tasks": []}},
+            {"tool": "acp_prompt", "input": {"action": "events", "status": "running", "events": [], "next_seq": 0, "first_seq": 1, "latest_seq": 0, "dropped_count": 0, "truncated": False, "has_more": False, "error_code": "", "message": "", "started_at": "date"}, "output": {"status": "running", "events": [], "next_seq": 0}},
+            {"tool": "workflow_template_manage", "input": {"count": 900, "vector_index_status": "ready"}, "output": {"count": 900, "vector_index_status": "ready"}},
+        ],
+    }
+
+
 def scalar(kind: str | list[str], description: str, **extra: Any) -> dict[str, Any]:
     return {"type": kind, "description": description, **extra}
 
@@ -848,7 +867,6 @@ def build_schemas() -> dict[str, dict[str, Any]]:
             "os": scalar("string", "节点操作系统。"),
             "arch": scalar("string", "节点架构。"),
             "capabilities": array("节点报告的工具能力。", scalar("string", "工具名。")),
-            "tool_contract_hash": scalar("string", "节点工具契约摘要。"),
             "online": scalar("boolean", "节点是否保持反向连接。"),
             "last_seen_at": TIMESTAMP,
             "created_at": TIMESTAMP,
@@ -1152,21 +1170,19 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         {
             "path": scalar("string", "相对 Deployment working_folder 的 AGENTS.md 路径。"),
             "scope": scalar("string", "该规则文件生效的 Project 相对子目录；根目录为 .。"),
-            "sha256": scalar("string", "规则正文 SHA-256 revision。", pattern="^sha256:[0-9a-f]{64}$"),
             "bytes": scalar("integer", "UTF-8 正文字节数。", minimum=0),
             "content": scalar("string", "完整规则正文；不会用摘要替代。"),
         },
-        ("path", "scope", "sha256", "bytes", "content"),
+        ("path", "scope", "bytes", "content"),
     )
     schemas["ProjectPrompt"] = obj(
         "Node 对一个 cwd 完整解析出的 Project Prompt 链。",
         {
-            "prompt_revision": scalar("string", "完整来源链 revision。", pattern="^sha256:[0-9a-f]{64}$"),
             "complete": scalar("boolean", "是否完整读取且通过预算校验。"),
             "bytes": scalar("integer", "完整来源链总字节数。", minimum=0),
             "sources": array("root 到 cwd 的完整适用 AGENTS.md 来源。", ref("ProjectPromptSource")),
         },
-        ("prompt_revision", "complete", "bytes", "sources"),
+        ("complete", "bytes", "sources"),
     )
     schemas["ProjectPromptLoadResult"] = obj(
         "Project Prompt 预览结果。",
@@ -1178,11 +1194,11 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         ("deployment_id", "cwd_rel", "prompt"),
     )
     schemas["ProjectPromptWriteRequest"] = obj(
-        "只允许管理面在指定 Project scope 创建或 CAS 更新真实 AGENTS.md。",
+        "只允许管理面在指定 Project scope 创建或并发安全地更新真实 AGENTS.md。",
         {
             "scope": scalar("string", "Deployment working_folder 内的相对子目录；根目录为 .。"),
             "content": scalar("string", "完整 UTF-8 AGENTS.md 正文，最大 64 KiB。", maxLength=65536),
-            "expected_sha256": scalar("string", "更新已有规则时必须匹配的来源 SHA-256；创建时为空或省略。"),
+            "expected_content": scalar("string", "编辑已有规则时从预览读取的原正文；服务端内部用于并发冲突检查。", maxLength=65536),
             "create": scalar("boolean", "true 表示仅当 AGENTS.md 不存在时创建。"),
         },
         ("scope", "content", "create"),
@@ -1221,66 +1237,67 @@ def build_schemas() -> dict[str, dict[str, Any]]:
         ("ok", "project_id", "deployment", "working_folder", "result"),
     )
     schemas["ProjectContextDeliveryEvidence"] = obj(
-        "管理员控制台可观察的 Project Context delivery 证据。returned 只表示 Nexus 已返回完整模型可见 tool result；host_consumed 只表示同一 MCP Host 显式确认该 revision。",
+        "管理员控制台可观察的 Project Context delivery 状态；不公开内部 ID 或 revision。",
         {
-            "work_session_id": scalar("string", "WorkSession ID。"),
-            "target_id": scalar("string", "Target ID；session-level project_open delivery 时省略。"),
-            "context_revision": scalar("string", "该 delivery 证据对应的 context revision。"),
             "status": enum("真实 delivery 状态。", ["returned", "host_consumed"]),
             "returned_at": TIMESTAMP,
             "host_consumed_at": TIMESTAMP,
             "updated_at": TIMESTAMP,
         },
-        ("work_session_id", "context_revision", "status", "returned_at", "updated_at"),
+        ("status", "returned_at", "updated_at"),
     )
     schemas["ProjectWorkSession"] = obj(
-        "管理员控制台可观察的 Project WorkSession；MCP owner 与 request hash 不序列化。",
+        "管理员控制台可观察的 Project WorkSession 摘要；内部请求、owner 与 revision 不序列化。",
         {
-            "work_session_id": scalar("string", "WorkSession ID。"),
-            "project_id": scalar("string", "Project ID。"),
-            "client_request_id": scalar("string", "MCP Host 提供的幂等 request ID。"),
-            "project_revision": scalar("string", "该会话当前绑定的 Project revision。"),
+            "work_session_id": scalar("string", "用于读取详情的 WorkSession ID；管理界面不直接展示。"),
             "status": enum("WorkSession 状态。", ["preparing", "ready", "running", "completed", "partial", "failed", "cancelled"]),
-            "context_revision": scalar("string", "当前聚合 Project context revision；未准备完成时可为空。"),
             "created_at": TIMESTAMP,
             "updated_at": TIMESTAMP,
             "delivery": ref("ProjectContextDeliveryEvidence"),
         },
-        ("work_session_id", "project_id", "client_request_id", "project_revision", "status", "context_revision", "created_at", "updated_at"),
+        ("work_session_id", "status", "created_at", "updated_at"),
     )
-    schemas["ProjectPromptScopeRevision"] = obj(
-        "Target 已交付过的 Prompt scope/revision。",
-        {"scope": scalar("string", "Project 相对 scope。"), "prompt_revision": scalar("string", "Prompt revision。")},
-        ("scope", "prompt_revision"),
+    schemas["ProjectWorkPromptSource"] = obj(
+        "管理员控制台可观察的 Project Prompt 来源摘要；不返回正文或内容哈希。",
+        {
+            "path": scalar("string", "AGENTS.md 相对路径。"),
+            "scope": scalar("string", "Project 相对生效范围。"),
+            "bytes": scalar("integer", "UTF-8 字节数。", minimum=0),
+        },
+        ("path", "scope", "bytes"),
+    )
+    schemas["ProjectWorkPrompt"] = obj(
+        "管理员控制台可观察的 Project Prompt 摘要。",
+        {
+            "complete": scalar("boolean", "适用来源是否完整读取。"),
+            "bytes": scalar("integer", "适用来源总 UTF-8 字节数。", minimum=0),
+            "sources": array("适用 Prompt 来源。", ref("ProjectWorkPromptSource")),
+        },
+        ("complete", "bytes", "sources"),
     )
     schemas["ProjectWorkTargetValue"] = obj(
-        "WorkSession 内一个 server-bound Target 的公开观察状态。",
+        "WorkSession 内一个 server-bound Target 的用户可观察状态。",
         {
-            "target_id": scalar("string", "Target ID。"),
-            "work_session_id": scalar("string", "WorkSession ID。"),
-            "project_id": scalar("string", "Project ID。"),
-            "deployment_id": scalar("string", "Deployment ID。"),
-            "node_id": scalar("string", "AgentDock Node ID。"),
+            "target_id": scalar("string", "用于界面列表稳定定位的 Target ID；不直接展示。"),
+            "deployment_id": scalar("string", "用于关联 Deployment 展示信息。"),
+            "node_id": scalar("string", "用于关联 AgentDock Node 展示信息。"),
             "cwd_rel": scalar("string", "该 Target 独立 Project 相对 cwd。"),
-            "deployment_revision": scalar("string", "Target 绑定的 applied Deployment revision。"),
-            "context_revision": scalar("string", "Target context revision。"),
             "status": enum("Target 状态。", ["preparing", "ready", "running", "idle", "unavailable", "context_error", "revoked"]),
             "permissions": ref("DeploymentPermissions"),
-            "prompt": ref("ProjectPrompt"),
+            "prompt": ref("ProjectWorkPrompt"),
         },
-        ("target_id", "work_session_id", "project_id", "deployment_id", "node_id", "cwd_rel", "deployment_revision", "context_revision", "status", "permissions", "prompt"),
+        ("target_id", "deployment_id", "node_id", "cwd_rel", "status", "permissions", "prompt"),
     )
     schemas["ProjectWorkTarget"] = obj(
-        "Target 及其 Prompt delivery scopes；只读用于管理员观察。",
+        "Target 用户可观察摘要；内部绑定和 revision 不序列化。",
         {
             "target": ref("ProjectWorkTargetValue"),
-            "prompt_scopes": array("Target 已交付 Prompt scopes。", ref("ProjectPromptScopeRevision")),
             "last_error": scalar("string", "Target 最近准备/撤销错误。"),
             "created_at": TIMESTAMP,
             "updated_at": TIMESTAMP,
             "delivery": ref("ProjectContextDeliveryEvidence"),
         },
-        ("target", "prompt_scopes", "created_at", "updated_at"),
+        ("target", "created_at", "updated_at"),
     )
     schemas["ProjectWorkSessionListResponse"] = obj(
         "Project 范围的 WorkSession 只读列表。",
@@ -1835,6 +1852,7 @@ def build_openapi(schemas: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "openapi": "3.1.0",
+        "x-mcp-model-result": build_mcp_result_contract(),
         "info": {
             "title": "NexusDock API",
             "version": "1.0.0",

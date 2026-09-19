@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -132,7 +133,15 @@ func TestNodeToolProxyKeepsAgentDockOutputContractAndStructuredContent(t *testin
 		OutputSchema: outputSchema,
 	}
 	published := nodeMCPTool(descriptor)
-	if !reflect.DeepEqual(published.OutputSchema, outputSchema) {
+	gotSchema, err := json.Marshal(published.OutputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSchema, err := json.Marshal(outputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotSchema) != string(wantSchema) {
 		t.Fatalf("node output schema changed: got=%#v want=%#v", published.OutputSchema, outputSchema)
 	}
 

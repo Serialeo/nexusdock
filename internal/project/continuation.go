@@ -283,14 +283,14 @@ func continuationWakeResult(d *continuationDocument, wakeID string) protocol.Wor
 }
 func validateContinuationTarget(ctx context.Context, conn *sql.Conn, ws, target string, current bool) (protocol.ExecutionContext, string, error) {
 	var e protocol.ExecutionContext
-	var node, targetState, sessionState, projectRevision, sessionRevision, desired, applied, applyState string
+	var node, targetState, sessionState, desired, applied, applyState string
 	var projectEnabled, deploymentEnabled, nodeEnabled, fullAccess int
 	var permissionsJSON string
 	if !current {
 		err := conn.QueryRowContext(ctx, `SELECT work_session_id,id,project_id,deployment_id,deployment_revision,context_revision,node_id FROM work_targets WHERE work_session_id=? AND id=?`, ws, target).Scan(&e.WorkSessionID, &e.TargetID, &e.ProjectID, &e.DeploymentID, &e.DeploymentRevision, &e.ContextRevision, &node)
 		return e, node, err
 	}
-	err := conn.QueryRowContext(ctx, `SELECT t.work_session_id,t.id,t.project_id,t.deployment_id,t.deployment_revision,t.context_revision,t.node_id,t.status,s.status,s.project_revision,p.revision,p.enabled,d.desired_revision,d.applied_revision,d.apply_status,d.enabled,n.enabled,n.full_access,t.permissions_json FROM work_targets t JOIN work_sessions s ON s.id=t.work_session_id LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN project_deployments d ON d.id=t.deployment_id LEFT JOIN agentdock_devices n ON n.id=t.node_id WHERE t.work_session_id=? AND t.id=?`, ws, target).Scan(&e.WorkSessionID, &e.TargetID, &e.ProjectID, &e.DeploymentID, &e.DeploymentRevision, &e.ContextRevision, &node, &targetState, &sessionState, &sessionRevision, &projectRevision, &projectEnabled, &desired, &applied, &applyState, &deploymentEnabled, &nodeEnabled, &fullAccess, &permissionsJSON)
+	err := conn.QueryRowContext(ctx, `SELECT t.work_session_id,t.id,t.project_id,t.deployment_id,t.deployment_revision,t.context_revision,t.node_id,t.status,s.status,p.enabled,d.desired_revision,d.applied_revision,d.apply_status,d.enabled,n.enabled,n.full_access,t.permissions_json FROM work_targets t JOIN work_sessions s ON s.id=t.work_session_id LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN project_deployments d ON d.id=t.deployment_id LEFT JOIN agentdock_devices n ON n.id=t.node_id WHERE t.work_session_id=? AND t.id=?`, ws, target).Scan(&e.WorkSessionID, &e.TargetID, &e.ProjectID, &e.DeploymentID, &e.DeploymentRevision, &e.ContextRevision, &node, &targetState, &sessionState, &projectEnabled, &desired, &applied, &applyState, &deploymentEnabled, &nodeEnabled, &fullAccess, &permissionsJSON)
 	if err != nil {
 		return e, node, continuationError("CONTINUATION_TARGET_DENIED", "Target identity or deployment is unavailable")
 	}
@@ -298,7 +298,7 @@ func validateContinuationTarget(ctx context.Context, conn *sql.Conn, ws, target 
 	if err := json.Unmarshal([]byte(permissionsJSON), &permissions); err != nil {
 		return e, node, err
 	}
-	if current && (permissions.FullAccess != (fullAccess == 1) || targetState != "ready" && targetState != "running" && targetState != "idle" || sessionState == "cancelled" || sessionState == "completed" || sessionState == "failed" || projectEnabled != 1 || deploymentEnabled != 1 || nodeEnabled != 1 || applyState != "applied" || desired != applied || e.DeploymentRevision != "rev-"+applied || sessionRevision != "rev-"+projectRevision) {
+	if current && (permissions.FullAccess != (fullAccess == 1) || targetState != "ready" && targetState != "running" && targetState != "idle" || sessionState == "cancelled" || sessionState == "completed" || sessionState == "failed" || projectEnabled != 1 || deploymentEnabled != 1 || nodeEnabled != 1 || applyState != "applied" || desired != applied || e.DeploymentRevision != "rev-"+applied) {
 		return e, node, continuationError("CONTINUATION_TARGET_DENIED", "Target configuration is no longer current")
 	}
 	return e, node, nil

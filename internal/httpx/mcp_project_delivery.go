@@ -74,7 +74,7 @@ func (s *Server) consumeProjectContextAck(ctx context.Context, request *mcpsdk.C
 	var conflict *projectstore.ContextDeliveryRevisionConflictError
 	switch {
 	case errors.As(err, &conflict):
-		return projectToolError(protocol.ErrorRevisionConflict, "Project Context acknowledgment revision is stale", map[string]any{"current_revision": conflict.ContextRevision})
+		return projectToolError(protocol.ErrorRevisionConflict, "Project Context acknowledgment is stale; refresh the Project Context", nil)
 	case errors.Is(err, projectstore.ErrContextDeliveryNotFound):
 		return projectToolError(protocol.ErrorContextRefreshRequired, "Project Context revision was not previously returned to this Host", nil)
 	case errors.Is(err, projectstore.ErrWorkSessionNotFound), errors.Is(err, projectstore.ErrWorkTargetNotFound):
@@ -84,50 +84,44 @@ func (s *Server) consumeProjectContextAck(ctx context.Context, request *mcpsdk.C
 	}
 }
 
-func (s *Server) recordProjectContextReturned(ctx context.Context, name string, result map[string]any) error {
-	if !isProjectContextTool(name) || result == nil {
+func (s *Server) recordProjectContextReturned(ctx context.Context, name string, response *mcpsdk.CallToolResult) error {
+	if !isProjectContextTool(name) || response == nil {
 		return nil
 	}
 	binding, ok := mcpClientBindingFromContext(ctx)
 	if !ok {
 		return errors.New("authenticated MCP client binding is required to record Project Context delivery")
 	}
-	workSessionID, _ := result["work_session_id"].(string)
-	workSessionID = strings.TrimSpace(workSessionID)
-	if workSessionID == "" {
-		return errors.New("Project Context result is missing work_session_id")
+	raw, ok := response.Meta[protocol.ProjectContextDeliveryMetaKey]
+	if !ok {
+		return errors.New("Project Context result is missing delivery metadata")
 	}
-	targetID := ""
-	contextRevision := ""
-	switch name {
-	case "project_open":
-		contextRevision, _ = result["context_revision"].(string)
-	case "project_context":
-		switch target := result["target"].(type) {
-		case protocol.WorkTarget:
-			targetID = target.ID
-			contextRevision = target.ContextRevision
-		case map[string]any:
-			targetID, _ = target["target_id"].(string)
-			contextRevision, _ = target["context_revision"].(string)
-		default:
-			encoded, err := json.Marshal(target)
-			if err != nil {
-				return fmt.Errorf("encode Project Context Target delivery identity: %w", err)
-			}
-			var decoded protocol.WorkTarget
-			if err := json.Unmarshal(encoded, &decoded); err != nil {
-				return fmt.Errorf("decode Project Context Target delivery identity: %w", err)
-			}
-			targetID = decoded.ID
-			contextRevision = decoded.ContextRevision
-		}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("encode Project Context delivery metadata: %w", err)
 	}
-	contextRevision = strings.TrimSpace(contextRevision)
-	targetID = strings.TrimSpace(targetID)
-	if contextRevision == "" || (name == "project_context" && targetID == "") {
+	var identity protocol.ProjectContextAcknowledgment
+	if err := json.Unmarshal(encoded, &identity); err != nil {
+		return fmt.Errorf("decode Project Context delivery metadata: %w", err)
+	}
+	identity.WorkSessionID = strings.TrimSpace(identity.WorkSessionID)
+	identity.TargetID = strings.TrimSpace(identity.TargetID)
+	identity.ContextRevision = strings.TrimSpace(identity.ContextRevision)
+	if identity.WorkSessionID == "" || identity.ContextRevision == "" || (name == "project_context" && identity.TargetID == "") {
 		return errors.New("Project Context result is missing delivery identity")
 	}
-	_, err := s.projects.RecordContextReturned(ctx, binding.OwnerKey, workSessionID, targetID, contextRevision)
-	return err
+	delivery, err := s.projects.RecordContextReturned(ctx, binding.OwnerKey, identity.WorkSessionID, identity.TargetID, identity.ContextRevision)
+	if err != nil {
+		return err
+	}
+	response.Meta[protocol.ProjectContextDeliveryMetaKey] = map[string]any{
+		"work_session_id":  identity.WorkSessionID,
+		"target_id":        identity.TargetID,
+		"context_revision": identity.ContextRevision,
+		"status":           delivery.Status,
+	}
+	if identity.TargetID == "" {
+		delete(response.Meta[protocol.ProjectContextDeliveryMetaKey].(map[string]any), "target_id")
+	}
+	return nil
 }

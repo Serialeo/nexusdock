@@ -15,7 +15,10 @@ import (
 	"github.com/uvwt/nexusdock/internal/agentdock"
 )
 
-const agentDockRuntimeRequestTimeout = 8 * time.Second
+const (
+	agentDockRuntimeRequestTimeout    = 8 * time.Second
+	agentDockMCPRefreshRequestTimeout = 310 * time.Second
+)
 
 type agentDockRuntimeError struct {
 	Status       int            `json:"-"`
@@ -38,31 +41,34 @@ func (e agentDockRuntimeError) Error() string {
 }
 
 func (s *Server) runtimeGet(ctx context.Context, nodeID, path string, query url.Values) (map[string]any, error) {
-	return s.runtimeRequest(ctx, nodeID, http.MethodGet, path, query, nil)
+	return s.runtimeRequest(ctx, nodeID, http.MethodGet, path, query, nil, false)
 }
 
 func (s *Server) runtimeDelete(ctx context.Context, nodeID, path string) (map[string]any, error) {
-	return s.runtimeRequest(ctx, nodeID, http.MethodDelete, path, nil, nil)
+	return s.runtimeRequest(ctx, nodeID, http.MethodDelete, path, nil, nil, false)
 }
 
 func (s *Server) runtimePost(ctx context.Context, nodeID, path string, payload any) (map[string]any, error) {
+	return s.runtimePostRequest(ctx, nodeID, path, payload, false)
+}
+
+func (s *Server) runtimePostPreservingParentDeadline(ctx context.Context, nodeID, path string, payload any) (map[string]any, error) {
+	return s.runtimePostRequest(ctx, nodeID, path, payload, true)
+}
+
+func (s *Server) runtimePostRequest(ctx context.Context, nodeID, path string, payload any, preserveParentDeadline bool) (map[string]any, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("encode AgentDock Runtime request: %w", err)
 	}
-	return s.runtimeRequest(ctx, nodeID, http.MethodPost, path, nil, body)
+	return s.runtimeRequest(ctx, nodeID, http.MethodPost, path, nil, body, preserveParentDeadline)
 }
 
-func (s *Server) runtimeRequest(ctx context.Context, nodeID, method, path string, query url.Values, requestBody []byte) (map[string]any, error) {
+func (s *Server) runtimeRequest(ctx context.Context, nodeID, method, path string, query url.Values, requestBody []byte, preserveParentDeadline bool) (map[string]any, error) {
 	if s.agentDockHub == nil {
 		return nil, agentDockRuntimeError{Code: "AGENTDOCK_CONNECTION_UNAVAILABLE", Message: "AgentDock 节点连接服务不可用"}
 	}
-	// 与 AgentDock direct Runtime API 保持同样的 8 秒边界；调用方已有更短 deadline 时不会被延长。
-	timeout := agentDockRuntimeRequestTimeout
-	if path == "/internal/runtime/builtins" {
-		timeout = 30 * time.Second
-	}
-	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	requestCtx, cancel := agentDockRuntimeRequestContext(ctx, path, preserveParentDeadline)
 	defer cancel()
 	if s.agentDock != nil {
 		if _, err := s.agentDock.Get(requestCtx, nodeID); err != nil {
@@ -84,6 +90,20 @@ func (s *Server) runtimeRequest(ctx context.Context, nodeID, method, path string
 		return nil, runtimeBridgeError(err)
 	}
 	return result, nil
+}
+
+func agentDockRuntimeRequestContext(ctx context.Context, path string, preserveParentDeadline bool) (context.Context, context.CancelFunc) {
+	// MCP refresh 已由节点按服务保存的 timeout_ms（最长 300 秒）控制。
+	// 这里允许额外 10 秒用于 Bridge 往返，同时仍服从 HTTP/调用方已有的更短 deadline。
+	if preserveParentDeadline {
+		return context.WithTimeout(ctx, agentDockMCPRefreshRequestTimeout)
+	}
+	// 其他调用与 AgentDock direct Runtime API 保持同样的 8 秒边界；调用方已有更短 deadline 时不会被延长。
+	timeout := agentDockRuntimeRequestTimeout
+	if path == "/internal/runtime/builtins" {
+		timeout = 30 * time.Second
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func runtimeQueryLimitStatus(limit int, status string) url.Values {

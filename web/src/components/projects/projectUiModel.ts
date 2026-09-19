@@ -41,13 +41,13 @@ export function deploymentApplyState(value: ProjectDeploymentState): UIStateLabe
     return { label: 'Node 已禁用此 Deployment', className: 'is-muted', detail: '配置保留在 Nexus；不提供新的执行 Target。' };
   }
   if (value.apply_status === 'failed') {
-    return { label: 'Node 应用失败', className: 'is-danger', detail: value.last_error || '目标 Node 拒绝或无法应用 desired revision。' };
+    return { label: 'Node 应用失败', className: 'is-danger', detail: value.last_error || '目标 Node 拒绝或无法应用当前配置。' };
   }
   if (value.apply_status === 'pending' || !value.applied_revision || value.desired_revision !== value.applied_revision) {
-    return { label: 'Nexus 已保存 · 等待 Node 应用', className: 'is-warning', detail: value.last_error || 'desired revision 已保存，尚未得到对应 applied revision。' };
+    return { label: 'Nexus 已保存 · 等待 Node 应用', className: 'is-warning', detail: value.last_error || '配置已保存，目标 Node 尚未确认应用。' };
   }
   if (value.apply_status === 'applied') {
-    return { label: 'Node 已应用', className: 'is-ok', detail: 'desired/applied revision 一致。' };
+    return { label: 'Node 已应用', className: 'is-ok', detail: '目标 Node 已同步当前配置。' };
   }
   return { label: value.apply_status || '未知状态', className: 'is-muted', detail: value.last_error || '等待状态刷新。' };
 }

@@ -16,6 +16,7 @@ import (
 	googlejsonschema "github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/uvwt/nexusdock/internal/agentdock"
+	"github.com/uvwt/nexusdock/internal/mcpresult"
 	"github.com/uvwt/nexusdock/internal/privatenotes"
 	projectstore "github.com/uvwt/nexusdock/internal/project"
 	"github.com/uvwt/nexusdock/internal/recall"
@@ -85,6 +86,7 @@ func (s *Server) registerCentralToolsOn(server *mcpsdk.Server) {
 		server.AddTool(definition, func(ctx context.Context, request *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 			arguments, err := toolArguments(request)
 			if err != nil {
+				s.logInvalidToolArguments(definition.Name, request, err)
 				return nil, err
 			}
 			if isContinuationTool(definition.Name) {
@@ -95,7 +97,12 @@ func (s *Server) registerCentralToolsOn(server *mcpsdk.Server) {
 				if ackErr != nil {
 					response, responseErr := s.gatewayToolResult(definition.Name, ackResult, ackErr)
 					if responseErr == nil && response != nil {
-						response.Meta = centralToolResultMetaWithApps(definition.Name, arguments, s.mcpAppsEnabled())
+						if response.Meta == nil {
+							response.Meta = mcpsdk.Meta{}
+						}
+						for key, value := range centralToolResultMetaWithApps(definition.Name, arguments, s.mcpAppsEnabled()) {
+							response.Meta[key] = value
+						}
 					}
 					return response, responseErr
 				}
@@ -103,13 +110,18 @@ func (s *Server) registerCentralToolsOn(server *mcpsdk.Server) {
 			result, err := s.callNexusTool(ctx, definition.Name, arguments)
 			response, responseErr := s.gatewayToolResult(definition.Name, result, err)
 			if responseErr == nil && response != nil && !response.IsError && isProjectContextTool(definition.Name) {
-				if deliveryErr := s.recordProjectContextReturned(ctx, definition.Name, result); deliveryErr != nil {
+				if deliveryErr := s.recordProjectContextReturned(ctx, definition.Name, response); deliveryErr != nil {
 					failureResult, failureErr := projectToolError("PROJECT_OPERATION_FAILED", "failed to persist Project Context returned delivery", map[string]any{"reason": deliveryErr.Error()})
 					response, responseErr = s.gatewayToolResult(definition.Name, failureResult, failureErr)
 				}
 			}
 			if responseErr == nil && response != nil {
-				response.Meta = centralToolResultMetaWithApps(definition.Name, arguments, s.mcpAppsEnabled())
+				if response.Meta == nil {
+					response.Meta = mcpsdk.Meta{}
+				}
+				for key, value := range centralToolResultMetaWithApps(definition.Name, arguments, s.mcpAppsEnabled()) {
+					response.Meta[key] = value
+				}
 			}
 			return response, responseErr
 		})
@@ -243,8 +255,8 @@ func nodeMCPToolWithApps(descriptor agentdock.ToolDescriptor, mcpAppsEnabled boo
 		return nil
 	}
 	tool := &mcpsdk.Tool{
-		Name: descriptor.Name, Title: descriptor.Title, Description: descriptor.Description,
-		InputSchema: nodeInputSchema(descriptor.InputSchema), OutputSchema: descriptor.OutputSchema,
+		Name: descriptor.Name, Title: descriptor.Title, Description: mcpresult.Description(descriptor.Name, descriptor.Description),
+		InputSchema: nodeInputSchema(descriptor.InputSchema), OutputSchema: nodeOutputSchema(descriptor.Name, descriptor.OutputSchema),
 	}
 	if len(descriptor.Annotations) > 0 {
 		encoded, _ := json.Marshal(descriptor.Annotations)
@@ -275,10 +287,28 @@ func (s *Server) nodeToolHandler(name string) mcpsdk.ToolHandler {
 	return func(ctx context.Context, request *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 		arguments, err := toolArguments(request)
 		if err != nil {
+			s.logInvalidToolArguments(name, request, err)
 			return nil, err
 		}
 		return s.callNodeTool(ctx, name, arguments)
 	}
+}
+
+func (s *Server) logInvalidToolArguments(name string, request *mcpsdk.CallToolRequest, err error) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	argumentBytes := 0
+	if request != nil && request.Params != nil {
+		argumentBytes = len(request.Params.Arguments)
+	}
+	s.logger.Warn(
+		"MCP tool params invalid",
+		"tool", name,
+		"argument_bytes", argumentBytes,
+		"error_offset", toolArgumentJSONErrorOffset(err),
+		"error", err,
+	)
 }
 
 func (s *Server) callNodeTool(ctx context.Context, name string, arguments map[string]any) (*mcpsdk.CallToolResult, error) {
@@ -333,9 +363,6 @@ func (s *Server) callNodeTool(ctx context.Context, name string, arguments map[st
 				projectErr = projectstore.ErrProjectNotFound
 			}
 			return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorContextRefreshRequired, "target_id": targetID}, projectErr)
-		}
-		if session.ProjectRevision != project.Revision {
-			return s.gatewayToolResult(name, map[string]any{"code": protocol.ErrorContextRefreshRequired, "target_id": targetID, "project_revision": project.Revision}, errors.New("Project configuration changed; refresh project_context before executing"))
 		}
 		deployment, deploymentErr := s.projects.GetDeployment(ctx, project.ID, target.Target.DeploymentID)
 		if deploymentErr != nil || !deployment.Enabled || deployment.ApplyStatus != string(protocol.DeploymentApplyApplied) || deployment.DesiredRevision != deployment.AppliedRevision || deployment.AppliedRevision != target.Target.DeploymentRevision {
@@ -515,53 +542,48 @@ func nodeInputSchema(schema map[string]any) map[string]any {
 	return cloned
 }
 
+func nodeOutputSchema(name string, schema map[string]any) map[string]any {
+	return mcpresult.Schema(name, schema)
+}
+
 func toolArguments(request *mcpsdk.CallToolRequest) (map[string]any, error) {
 	arguments := map[string]any{}
 	if request == nil || request.Params == nil || len(request.Params.Arguments) == 0 || string(request.Params.Arguments) == "null" {
 		return arguments, nil
 	}
 	if err := json.Unmarshal(request.Params.Arguments, &arguments); err != nil {
-		return nil, errors.New("tool arguments must be a JSON object")
+		offset := toolArgumentJSONErrorOffset(err)
+		if offset > 0 {
+			return nil, fmt.Errorf("tool arguments must be a JSON object (%d bytes, offset %d): %w", len(request.Params.Arguments), offset, err)
+		}
+		return nil, fmt.Errorf("tool arguments must be a JSON object (%d bytes): %w", len(request.Params.Arguments), err)
 	}
 	return arguments, nil
 }
 
+func toolArgumentJSONErrorOffset(err error) int64 {
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return syntaxErr.Offset
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return typeErr.Offset
+	}
+	return 0
+}
+
 func gatewayToolResult(name string, result map[string]any, err error) (*mcpsdk.CallToolResult, error) {
-	if err == nil && result != nil {
-		if _, hasContent := result["content"]; hasContent {
-			if _, hasErrorFlag := result["isError"]; hasErrorFlag {
-				encoded, encodeErr := json.Marshal(result)
-				if encodeErr != nil {
-					return nil, encodeErr
-				}
-				var proxied mcpsdk.CallToolResult
-				if decodeErr := json.Unmarshal(encoded, &proxied); decodeErr != nil {
-					return nil, decodeErr
-				}
-				return &proxied, nil
-			}
-		}
-	}
-	if result == nil {
-		result = map[string]any{}
-	}
 	if err != nil {
-		// 保留调用方提供的结构化错误详情，避免契约差异等可操作信息被统一错误包装丢失。
-		result["tool"] = name
-		result["error"] = err.Error()
+		copied := make(map[string]any, len(result)+2)
+		for key, value := range result {
+			copied[key] = value
+		}
+		copied["tool"] = name
+		copied["error"] = err.Error()
+		return mcpresult.Build(name, copied, true)
 	}
-	encoded, encodeErr := json.Marshal(map[string]any{
-		"isError": err != nil, "structuredContent": result,
-		"content": []map[string]any{{"type": "text", "text": prettyJSON(result)}},
-	})
-	if encodeErr != nil {
-		return nil, encodeErr
-	}
-	var response mcpsdk.CallToolResult
-	if decodeErr := json.Unmarshal(encoded, &response); decodeErr != nil {
-		return nil, decodeErr
-	}
-	return &response, nil
+	return mcpresult.Build(name, result, false)
 }
 
 func (s *Server) gatewayToolResult(name string, result map[string]any, err error) (*mcpsdk.CallToolResult, error) {
@@ -574,14 +596,6 @@ func (s *Server) gatewayToolResult(name string, result map[string]any, err error
 		response.Meta = nil
 	}
 	return response, nil
-}
-
-func prettyJSON(value any) string {
-	encoded, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return fmt.Sprint(value)
-	}
-	return string(encoded)
 }
 
 func (s *Server) decorateRecallSearchResults(results []recall.SearchResult) ([]map[string]any, error) {

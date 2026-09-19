@@ -53,12 +53,12 @@ func TestProjectPromptHTTPPreviewAndWriteUsePrivateBridgeOperations(t *testing.T
 	}
 	writeProjectResult(t, socket, load.RequestID, protocol.ProjectPromptLoadResult{DeploymentID: deployment.ID, CWDRel: "backend", Prompt: prompt})
 	preview := <-previewDone
-	if preview.Code != http.StatusOK || !strings.Contains(preview.Body, `"prompt_revision":"sha256:prompt-v1"`) || !strings.Contains(preview.Body, `"working_folder"`) {
+	if preview.Code != http.StatusOK || !strings.Contains(preview.Body, `"working_folder"`) || strings.Contains(preview.Body, "sha256:") || strings.Contains(preview.Body, `"prompt_revision"`) || strings.Contains(preview.Body, `"sha256"`) {
 		t.Fatalf("Prompt preview response status=%d body=%s", preview.Code, preview.Body)
 	}
 
 	writeBody, _ := json.Marshal(map[string]any{
-		"scope": "backend", "content": "updated\n", "expected_sha256": "sha256:source-v1", "create": false,
+		"scope": "backend", "content": "updated\n", "expected_content": "rules\n", "create": false,
 	})
 	writeDone := make(chan *responseSnapshot, 1)
 	go func() {
@@ -73,7 +73,7 @@ func TestProjectPromptHTTPPreviewAndWriteUsePrivateBridgeOperations(t *testing.T
 	if err := json.Unmarshal(writeInvoke.Arguments, &writeRequest); err != nil {
 		t.Fatal(err)
 	}
-	if writeRequest.DeploymentID != deployment.ID || writeRequest.DeploymentRevision != deployment.AppliedRevision || writeRequest.Scope != "backend" || writeRequest.ExpectedSHA256 != "sha256:source-v1" || writeRequest.Create || writeRequest.Content != "updated\n" {
+	if writeRequest.DeploymentID != deployment.ID || writeRequest.DeploymentRevision != deployment.AppliedRevision || writeRequest.Scope != "backend" || writeRequest.ExpectedSHA256 != expectedProjectPromptSHA("rules\n", false) || writeRequest.Create || writeRequest.Content != "updated\n" {
 		t.Fatalf("Prompt write request = %#v", writeRequest)
 	}
 	updatedPrompt := protocol.ProjectPrompt{
@@ -84,7 +84,7 @@ func TestProjectPromptHTTPPreviewAndWriteUsePrivateBridgeOperations(t *testing.T
 		DeploymentID: deployment.ID, Scope: "backend", Source: updatedPrompt.Sources[0], Prompt: updatedPrompt, Created: false,
 	})
 	written := <-writeDone
-	if written.Code != http.StatusOK || !strings.Contains(written.Body, `"sha256:source-v2"`) || !strings.Contains(written.Body, `"created":false`) {
+	if written.Code != http.StatusOK || !strings.Contains(written.Body, `"created":false`) || strings.Contains(written.Body, "sha256:") || strings.Contains(written.Body, `"prompt_revision"`) || strings.Contains(written.Body, `"sha256"`) {
 		t.Fatalf("Prompt write response status=%d body=%s", written.Code, written.Body)
 	}
 }

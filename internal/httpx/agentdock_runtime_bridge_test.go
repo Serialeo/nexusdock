@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"reflect"
@@ -70,10 +71,47 @@ func TestRuntimeBridgeErrorKeepsTransportFailuresUnavailable(t *testing.T) {
 	}
 }
 
-func TestAgentDockRuntimeRequestTimeoutIsEightSeconds(t *testing.T) {
-	if agentDockRuntimeRequestTimeout != 8*time.Second {
-		t.Fatalf("runtime request timeout = %s", agentDockRuntimeRequestTimeout)
+func TestAgentDockRuntimeRequestContextSelectsActionBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name                   string
+		path                   string
+		preserveParentDeadline bool
+		want                   time.Duration
+	}{
+		{name: "ordinary runtime request", path: "/internal/runtime/mcp", want: 8 * time.Second},
+		{name: "builtins request", path: "/internal/runtime/builtins", want: 30 * time.Second},
+		{name: "MCP refresh keeps caller deadline", path: "/internal/runtime/mcp", preserveParentDeadline: true, want: 2 * time.Minute},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parent, parentCancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer parentCancel()
+			started := time.Now()
+			requestCtx, cancel := agentDockRuntimeRequestContext(parent, test.path, test.preserveParentDeadline)
+			defer cancel()
+			deadline, ok := requestCtx.Deadline()
+			if !ok {
+				t.Fatal("runtime request context omitted deadline")
+			}
+			got := deadline.Sub(started)
+			if got < test.want-time.Second || got > test.want+time.Second {
+				t.Fatalf("runtime request deadline = %s, want about %s", got, test.want)
+			}
+		})
 	}
+
+	t.Run("MCP refresh has a bounded fallback", func(t *testing.T) {
+		started := time.Now()
+		requestCtx, cancel := agentDockRuntimeRequestContext(t.Context(), "/internal/runtime/mcp", true)
+		defer cancel()
+		deadline, ok := requestCtx.Deadline()
+		if !ok {
+			t.Fatal("runtime request context omitted deadline")
+		}
+		got := deadline.Sub(started)
+		if got < agentDockMCPRefreshRequestTimeout-time.Second || got > agentDockMCPRefreshRequestTimeout+time.Second {
+			t.Fatalf("runtime request deadline = %s, want about %s", got, agentDockMCPRefreshRequestTimeout)
+		}
+	})
 }
 
 func TestRuntimeUnavailableRecognizesRuntimeError(t *testing.T) {

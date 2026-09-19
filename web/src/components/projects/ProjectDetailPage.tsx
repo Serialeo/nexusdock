@@ -206,7 +206,6 @@ export default function ProjectDetailPage({ projectID, nodes, onBack }: { projec
 
     <section className="project-detail-meta">
       <span><small>Project</small><code>{project?.id || projectID}</code></span>
-      <span><small>Revision</small><strong>{project?.revision || '—'}</strong></span>
       <span><small>Deployment</small><strong>{deployments.length}</strong></span>
       <span><small>可用 Target</small><strong>{available}</strong></span>
       <span><small>状态</small><strong>{project?.enabled ? '已启用' : '已停用'}</strong></span>
@@ -231,7 +230,7 @@ export default function ProjectDetailPage({ projectID, nodes, onBack }: { projec
             <div className="deployment-identity"><strong>{node?.name || deployment.node_id}</strong><small>{node?.os && node?.arch ? `${node.os}/${node.arch}` : 'Node 信息未知'} · {node?.online ? '在线' : '离线'} · {node?.full_access ? 'Full Access' : '按 Deployment 权限'}</small><code title={deployment.working_folder || '未设置 Project Folder'}>{deployment.working_folder || '未设置（使用 Node 默认 cwd）'}</code></div>
             <div className="deployment-purpose"><span><small>Role</small><strong>{deployment.role || '未填写'}</strong></span><span><small>Purpose</small><strong>{deployment.purpose || '未填写'}</strong></span></div>
             <div className="deployment-permissions"><small>有效权限</small><strong>{node?.full_access ? 'Full Access（Node）' : permissionText(deployment)}</strong><span>{node?.full_access ? '不受 Project Folder 限制，仍受 Node OS 权限约束' : deployment.permissions.shell ? 'Git 随 shell 可执行' : 'Git 不可通过命令执行'}</span></div>
-            <div className="deployment-apply"><span className={`project-state ${state.className}`}>{state.label}</span><small>{state.detail}</small><code>desired {deployment.desired_revision || '—'}</code><code>applied {deployment.applied_revision || '—'}</code></div>
+            <div className="deployment-apply"><span className={`project-state ${state.className}`}>{state.label}</span><small>{state.detail}</small></div>
             <div className="deployment-actions"><button type="button" className="nx-button is-secondary is-small" disabled={!!busy} onClick={() => openEdit(deployment)}><Pencil size={14} />编辑</button><button type="button" className="nx-button is-secondary is-small" disabled={!!busy || !deployment.enabled} onClick={() => void applyDeployment(deployment)}><RotateCw size={14} />重试应用</button><button type="button" className="nx-button is-danger is-small" disabled={!!busy} onClick={() => { setDialogError(''); setDeleting(deployment); }}><Trash2 size={14} />删除</button></div>
           </article>;
         })}
@@ -244,7 +243,7 @@ export default function ProjectDetailPage({ projectID, nodes, onBack }: { projec
     {(creating || editing) && <Dialog title={editing ? '编辑 Deployment' : '添加 Deployment'} description="Node 是执行目标；Project Folder 可选，只定义默认 cwd 与 Project Prompt 边界。Full Access 在 Node 页面独立配置。" onClose={() => { if (!busy) { setCreating(false); setEditing(null); } }} closeDisabled={!!busy} wide>
       <form className="deployment-form" onSubmit={saveDeployment}>
         {dialogError && <div className="nx-alert is-error" role="alert">{dialogError}</div>}
-        {editing && dirtyAgainst(editing) && <div className="nx-alert is-info" role="status">本地表单有未保存修改；Node 仍使用当前 applied revision。</div>}
+        {editing && dirtyAgainst(editing) && <div className="nx-alert is-info" role="status">本地表单有未保存修改；Node 仍使用上次已应用的配置。</div>}
         <label><span>Node</span><select data-dialog-initial-focus value={draft.nodeID} disabled={!!editing || !!busy} onChange={(event) => { setFolderPickerOpen(false); setDraft((value) => ({ ...value, nodeID: event.target.value, workingFolder: editing ? value.workingFolder : '' })); }} required><option value="">选择 Node</option>{nodes.filter((node) => node.enabled).map((node) => <option key={node.id} value={node.id}>{node.name} · {node.os || 'unknown'}{node.online ? '' : ' · 离线'}</option>)}</select>{editing && <small>已存在的 Deployment 不原地换 Node；如需迁移，请新建 Deployment 后删除旧映射。</small>}</label>
         <label className="is-wide"><span>Project Folder（可选）</span><span className="deployment-working-folder"><input value={draft.workingFolder} onChange={(event) => setDraft((value) => ({ ...value, workingFolder: event.target.value }))} placeholder={selectedNode?.os === 'windows' ? '可选，例如 D:\\Project' : '可选，例如 /srv/project'} disabled={!!busy} spellCheck={false} /><button type="button" className="nx-button is-secondary" disabled={!!busy || !selectedNode} onClick={() => setFolderPickerOpen(true)}><FolderOpen size={15} />浏览 Node</button></span><small>{draft.workingFolder.trim() ? '该路径作为默认 cwd、AGENTS.md 搜索边界与源码 provenance 根；不会限制 Full Access 的 OS 访问范围。' : '留空时相对路径从该 Node 的 AgentDock 默认目录开始，且不会自动发现任何 Project AGENTS.md。'} {selectedNode ? `${selectedNode.name} · ${selectedNode.online ? '在线' : '离线'}` : '先选择 Node'}。</small></label>
         <label><span>Role</span><input value={draft.role} onChange={(event) => setDraft((value) => ({ ...value, role: event.target.value }))} placeholder="primary-development" disabled={!!busy} /></label>

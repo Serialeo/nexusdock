@@ -19,7 +19,6 @@ export type AgentDockNode = {
   os?: string;
   arch?: string;
   capabilities: string[];
-  tool_contract_hash?: string;
   online: boolean;
   last_seen_at?: string;
   created_at: string;

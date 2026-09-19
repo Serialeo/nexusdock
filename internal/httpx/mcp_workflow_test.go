@@ -26,7 +26,7 @@ func TestCentralWorkflowTemplateManageUsesNexusRegistry(t *testing.T) {
 	}
 	assertCentralToolResultMatchesOutputSchema(t, "workflow_template_manage", loaded)
 	template, ok := loaded["template"].(workflowTemplate)
-	if !ok || template.ID != "development.demo" || template.Status != workflowTemplateActive {
+	if !ok || template.ID != "development.demo" || template.Status != workflowTemplateActive || template.Hash != "" {
 		t.Fatalf("get=%#v", loaded)
 	}
 
@@ -38,6 +38,11 @@ func TestCentralWorkflowTemplateManageUsesNexusRegistry(t *testing.T) {
 	}
 	if _, ok := many["next_required_action"]; ok {
 		t.Fatalf("get_many leaked next_required_action prose: %#v", many)
+	}
+	for _, template := range many["templates"].([]workflowTemplate) {
+		if template.Hash != "" {
+			t.Fatalf("get_many exposed registry hash: %#v", many)
+		}
 	}
 	assertCentralToolResultMatchesOutputSchema(t, "workflow_template_manage", many)
 
@@ -62,6 +67,9 @@ func TestCentralWorkflowTemplateManageUsesNexusRegistry(t *testing.T) {
 	}
 	if _, legacy := vectorIndex["available"]; legacy {
 		t.Fatalf("vector_index leaked REST-only available field: %#v", vectorIndex)
+	}
+	if _, exposed := vectorIndex["content"]; exposed {
+		t.Fatalf("vector_index exposed raw index content: %#v", vectorIndex)
 	}
 }
 

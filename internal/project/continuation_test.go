@@ -70,6 +70,32 @@ func newContinuationFixture(t *testing.T) *continuationFixture {
 	f.target = target.Target
 	return f
 }
+
+func TestContinuationCurrentTargetIgnoresProjectRowRevision(t *testing.T) {
+	f := newContinuationFixture(t)
+	project, err := f.s.GetProject(t.Context(), f.target.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.UpdateProject(t.Context(), project.ID, UpdateProjectInput{
+		ExpectedRevision: project.Revision, Name: project.Name + " renamed", OrchestrationPolicy: "updated guidance", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := f.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	current, node, err := validateContinuationTarget(t.Context(), conn, f.ws, f.target.ID, true)
+	if err != nil {
+		t.Fatalf("unrelated Project row edit invalidated continuation Target: %v", err)
+	}
+	if node != f.node || current.TargetID != f.target.ID || current.ContextRevision != f.target.ContextRevision {
+		t.Fatalf("continuation Target identity changed after unrelated Project edit: current=%#v node=%q", current, node)
+	}
+}
+
 func (f *continuationFixture) control(t *testing.T, in protocol.WorkContinuationInput) protocol.WorkContinuationResult {
 	t.Helper()
 	in.WorkSessionID = f.ws

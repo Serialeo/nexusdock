@@ -132,8 +132,8 @@ func TestNexusSignedArtifactURLStreamsFromConnectedNode(t *testing.T) {
 	if !strings.HasPrefix(publicURL, "https://nexus.example.test/artifacts/public/") || structured["download_via"] != "nexusdock" {
 		t.Fatalf("decorated result = %#v", structured)
 	}
-	if text := envelope["content"].([]any)[0].(map[string]any)["text"].(string); !strings.Contains(text, "https://nexus.example.test/artifacts/public/") {
-		t.Fatalf("text content did not receive signed URL: %s", text)
+	if text := envelope["content"].([]any)[0].(map[string]any)["text"].(string); strings.Contains(text, "https://nexus.example.test/artifacts/public/") {
+		t.Fatalf("Artifact URL was duplicated into text content: %s", text)
 	}
 
 	parsed, err := url.Parse(publicURL)
@@ -174,7 +174,7 @@ func TestNexusArtifactStreamWithholdsCorruptFinalChunk(t *testing.T) {
 
 	hub, node, serveDone := startArtifactBridgeNode(t, served, sha, expiresAt, nil)
 	server := &Server{cfg: config.Config{PublicURL: "https://nexus.example.test", NexusDataDir: t.TempDir()}, agentDockHub: hub, logger: slog.Default()}
-	publicURL, err := server.signedArtifactURL(node.ID, "artifact123", "report.txt", sha, expiresAt.Unix())
+	publicURL, err := server.signedArtifactURL(node.ID, "artifact123", "report.txt", expiresAt.Unix())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,8 +221,7 @@ func TestArtifactDownloadConcurrencyLimitIsPerNode(t *testing.T) {
 	server.releaseArtifactDownload("node_other")
 
 	expires := time.Now().UTC().Add(time.Hour).Unix()
-	sha := strings.Repeat("a", 64)
-	publicURL, err := server.signedArtifactURL(nodeID, "artifact1", "report.txt", sha, expires)
+	publicURL, err := server.signedArtifactURL(nodeID, "artifact1", "report.txt", expires)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +252,7 @@ func TestNexusArtifactDownloadSupportsEmptyPayload(t *testing.T) {
 	expiresAt := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
 	hub, node, serveDone := startArtifactBridgeNode(t, payload, sha, expiresAt, nil)
 	server := &Server{cfg: config.Config{PublicURL: "https://nexus.example.test", NexusDataDir: t.TempDir()}, agentDockHub: hub, logger: slog.Default()}
-	publicURL, err := server.signedArtifactURL(node.ID, "artifact123", "report.txt", sha, expiresAt.Unix())
+	publicURL, err := server.signedArtifactURL(node.ID, "artifact123", "report.txt", expiresAt.Unix())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +322,7 @@ func TestNexusArtifactStreamRejectsCrossChunkSizeChange(t *testing.T) {
 		}
 	})
 	server := &Server{cfg: config.Config{PublicURL: "https://nexus.example.test", NexusDataDir: t.TempDir()}, agentDockHub: hub, logger: slog.Default()}
-	publicURL, err := server.signedArtifactURL(node.ID, "artifact123", "report.txt", sha, expiresAt.Unix())
+	publicURL, err := server.signedArtifactURL(node.ID, "artifact123", "report.txt", expiresAt.Unix())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,8 +357,7 @@ func TestNexusArtifactDownloadStatusBoundaries(t *testing.T) {
 	t.Run("expired", func(t *testing.T) {
 		server := &Server{cfg: config.Config{PublicURL: "https://nexus.example.test", NexusDataDir: t.TempDir()}, agentDockHub: agentdock.NewHub(nil), logger: slog.Default()}
 		expires := time.Now().UTC().Add(-time.Minute).Unix()
-		sha := strings.Repeat("a", 64)
-		publicURL, err := server.signedArtifactURL("node_1", "artifact1", "report.txt", sha, expires)
+		publicURL, err := server.signedArtifactURL("node_1", "artifact1", "report.txt", expires)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -378,8 +376,7 @@ func TestNexusArtifactDownloadStatusBoundaries(t *testing.T) {
 	t.Run("offline", func(t *testing.T) {
 		server := &Server{cfg: config.Config{PublicURL: "https://nexus.example.test", NexusDataDir: t.TempDir()}, agentDockHub: agentdock.NewHub(nil), logger: slog.Default()}
 		expires := time.Now().UTC().Add(time.Hour).Unix()
-		sha := strings.Repeat("a", 64)
-		publicURL, err := server.signedArtifactURL("node_1", "artifact1", "report.txt", sha, expires)
+		publicURL, err := server.signedArtifactURL("node_1", "artifact1", "report.txt", expires)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -407,7 +404,7 @@ func TestNexusArtifactDownloadStatusBoundaries(t *testing.T) {
 			}
 		})
 		server := &Server{cfg: config.Config{PublicURL: "https://nexus.example.test", NexusDataDir: t.TempDir()}, agentDockHub: hub, logger: slog.Default()}
-		publicURL, err := server.signedArtifactURL(node.ID, "artifact123", "report.txt", sha, expiresAt.Unix())
+		publicURL, err := server.signedArtifactURL(node.ID, "artifact123", "report.txt", expiresAt.Unix())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -519,14 +516,16 @@ func TestNexusSignedArtifactURLRejectsTampering(t *testing.T) {
 		agentDockHub: agentdock.NewHub(nil), logger: slog.Default(),
 	}
 	expires := time.Now().UTC().Add(time.Hour).Unix()
-	sha := strings.Repeat("a", 64)
-	publicURL, err := server.signedArtifactURL("node_1", "artifact1", "report.txt", sha, expires)
+	publicURL, err := server.signedArtifactURL("node_1", "artifact1", "report.txt", expires)
 	if err != nil {
 		t.Fatal(err)
 	}
 	parsed, _ := url.Parse(publicURL)
 	query := parsed.Query()
-	query.Set("sha256", strings.Repeat("b", 64))
+	if query.Get("sha256") != "" {
+		t.Fatalf("signed Artifact URL exposed checksum: %s", publicURL)
+	}
+	query.Set("sig", "tampered")
 	parsed.RawQuery = query.Encode()
 
 	mux := http.NewServeMux()

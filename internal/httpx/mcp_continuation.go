@@ -114,7 +114,28 @@ func (s *Server) callWorkContinuation(ctx context.Context, name string, args map
 	if err != nil {
 		return continuationError(err)
 	}
-	return asMap(result)
+	mapped, mapErr := asMap(result)
+	if mapErr != nil {
+		return nil, mapErr
+	}
+	stripContinuationInternalMetadata(mapped)
+	return mapped, nil
+}
+
+func stripContinuationInternalMetadata(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range []string{"context_revision", "deployment_revision", "arguments_digest"} {
+			delete(typed, key)
+		}
+		for _, child := range typed {
+			stripContinuationInternalMetadata(child)
+		}
+	case []any:
+		for _, child := range typed {
+			stripContinuationInternalMetadata(child)
+		}
+	}
 }
 
 func continuationError(err error) (map[string]any, error) {

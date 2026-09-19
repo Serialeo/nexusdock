@@ -177,7 +177,7 @@ func (s *Server) callProjectContext(ctx context.Context, args map[string]any) (m
 		return projectToolStoreError(err)
 	}
 	if !deployment.Enabled || deployment.ApplyStatus != string(protocol.DeploymentApplyApplied) || deployment.DesiredRevision != deployment.AppliedRevision || deployment.AppliedRevision != stored.Target.DeploymentRevision {
-		return projectToolError(protocol.ErrorRevisionConflict, "Target Deployment revision is no longer current", map[string]any{"target_id": targetID, "deployment_id": deployment.ID, "current_revision": deployment.DesiredRevision})
+		return projectToolError(protocol.ErrorRevisionConflict, "Target Deployment configuration changed; refresh the Project Context", map[string]any{"target_id": targetID, "deployment_id": deployment.ID})
 	}
 	if !s.agentDockHub.Online(deployment.NodeID) {
 		return projectToolError(protocol.ErrorDeploymentNotReady, "Target AgentDock is offline", map[string]any{"target_id": targetID, "node_id": deployment.NodeID})
@@ -492,21 +492,19 @@ func hashProjectOpenRequest(projectID string, targetsProvided bool, targets []pr
 
 func projectTargetContextRevision(project projectstore.Project, deployment projectstore.Deployment, permissions protocol.DeploymentPermissions, cwdRel string, prompt protocol.ProjectPrompt, scopes []protocol.PromptScopeRevision, sourceProvenance protocol.SourceProvenance) string {
 	material := struct {
-		CombinerVersion     string                         `json:"combiner_version"`
-		ProjectID           string                         `json:"project_id"`
-		ProjectRevision     string                         `json:"project_revision"`
-		OrchestrationPolicy string                         `json:"orchestration_policy"`
-		DeploymentID        string                         `json:"deployment_id"`
-		DeploymentRevision  string                         `json:"deployment_revision"`
-		NodeID              string                         `json:"node_id"`
-		CWDRel              string                         `json:"cwd_rel"`
-		Permissions         protocol.DeploymentPermissions `json:"permissions"`
-		PromptRevision      string                         `json:"prompt_revision"`
-		PromptScopes        []protocol.PromptScopeRevision `json:"prompt_scopes"`
-		SourceProvenance    protocol.SourceProvenance      `json:"source_provenance"`
+		CombinerVersion    string                         `json:"combiner_version"`
+		ProjectID          string                         `json:"project_id"`
+		DeploymentID       string                         `json:"deployment_id"`
+		DeploymentRevision string                         `json:"deployment_revision"`
+		NodeID             string                         `json:"node_id"`
+		CWDRel             string                         `json:"cwd_rel"`
+		Permissions        protocol.DeploymentPermissions `json:"permissions"`
+		PromptRevision     string                         `json:"prompt_revision"`
+		PromptScopes       []protocol.PromptScopeRevision `json:"prompt_scopes"`
+		SourceProvenance   protocol.SourceProvenance      `json:"source_provenance"`
 	}{
-		CombinerVersion: "nexus-project-context-v2", ProjectID: project.ID, ProjectRevision: project.Revision,
-		OrchestrationPolicy: project.OrchestrationPolicy, DeploymentID: deployment.ID, DeploymentRevision: deployment.AppliedRevision,
+		CombinerVersion: "nexus-project-context-v3", ProjectID: project.ID,
+		DeploymentID: deployment.ID, DeploymentRevision: deployment.AppliedRevision,
 		NodeID: deployment.NodeID, CWDRel: cwdRel, Permissions: permissions, PromptRevision: prompt.PromptRevision, PromptScopes: scopes,
 		SourceProvenance: sourceProvenance,
 	}
@@ -532,28 +530,27 @@ func projectSessionContextRevision(project projectstore.Project, targets []proje
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].DeploymentID < items[j].DeploymentID })
 	encoded, _ := json.Marshal(struct {
-		Version         string           `json:"version"`
-		ProjectID       string           `json:"project_id"`
-		ProjectRevision string           `json:"project_revision"`
-		Targets         []targetRevision `json:"targets"`
-	}{Version: "nexus-work-session-context-v1", ProjectID: project.ID, ProjectRevision: project.Revision, Targets: items})
+		Version   string           `json:"version"`
+		ProjectID string           `json:"project_id"`
+		Targets   []targetRevision `json:"targets"`
+	}{Version: "nexus-work-session-context-v2", ProjectID: project.ID, Targets: items})
 	sum := sha256.Sum256(encoded)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func (s *Server) projectContextDeliveryView(ctx context.Context, ownerKey, workSessionID, targetID, contextRevision string) (protocol.ProjectContextDelivery, error) {
-	view := protocol.ProjectContextDelivery{Status: protocol.ProjectContextReturned, ContextRevision: contextRevision}
+func (s *Server) projectContextDeliveryView(ctx context.Context, ownerKey, workSessionID, targetID, contextRevision string) (map[string]any, error) {
+	status := protocol.ProjectContextReturned
 	stored, err := s.projects.GetContextDelivery(ctx, ownerKey, workSessionID, targetID)
 	if err == nil {
 		if stored.ContextRevision == contextRevision && stored.Status == protocol.ProjectContextHostConsumed {
-			view.Status = protocol.ProjectContextHostConsumed
+			status = protocol.ProjectContextHostConsumed
 		}
-		return view, nil
+		return map[string]any{"status": status}, nil
 	}
 	if errors.Is(err, projectstore.ErrContextDeliveryNotFound) {
-		return view, nil
+		return map[string]any{"status": status}, nil
 	}
-	return protocol.ProjectContextDelivery{}, err
+	return nil, err
 }
 
 func validateProjectPromptContextBudget(targets []projectstore.WorkTarget) error {
@@ -588,12 +585,16 @@ func validateProjectPromptContextBudget(targets []projectstore.WorkTarget) error
 }
 
 func validateProjectContextDeliveryEnvelope(result map[string]any) error {
-	encoded, err := json.Marshal(result)
+	response, err := gatewayToolResult("project_context", result, nil)
+	if err != nil {
+		return fmt.Errorf("build Project Context delivery: %w", err)
+	}
+	encoded, err := json.Marshal(response)
 	if err != nil {
 		return fmt.Errorf("encode Project Context delivery: %w", err)
 	}
 	if len(encoded) > protocol.MaxProjectContextDeliveryBytes {
-		return fmt.Errorf("Project Context JSON is %d bytes", len(encoded))
+		return fmt.Errorf("Project Context MCP envelope is %d bytes", len(encoded))
 	}
 	return nil
 }

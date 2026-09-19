@@ -199,7 +199,7 @@ func TestProjectContextRefreshesOnlyBoundTargetAndRejectsRevokedTarget(t *testin
 		t.Fatalf("project_context Project = %#v", projectView)
 	}
 	deploymentView := normalized["deployment"].(map[string]any)
-	if deploymentView["id"] != deployment.ID || deploymentView["working_folder"] != deployment.WorkingFolder || deploymentView["applied_revision"] != deployment.AppliedRevision {
+	if deploymentView["id"] != deployment.ID || deploymentView["working_folder"] != deployment.WorkingFolder {
 		t.Fatalf("project_context Deployment = %#v", deploymentView)
 	}
 	target := normalized["target"].(map[string]any)
@@ -211,9 +211,8 @@ func TestProjectContextRefreshesOnlyBoundTargetAndRejectsRevokedTarget(t *testin
 	if len(promptSources) != 2 || promptSources[1].(map[string]any)["content"] != "backend\n" {
 		t.Fatalf("project_context full Prompt sources = %#v", promptSources)
 	}
-	delivery := normalized["delivery"].(map[string]any)
-	if delivery["status"] != string(protocol.ProjectContextReturned) || delivery["context_revision"] != rebind.ContextRevision {
-		t.Fatalf("project_context delivery = %#v", delivery)
+	if _, exists := normalized["delivery"]; exists {
+		t.Fatalf("project_context exposed Host delivery state: %#v", normalized)
 	}
 	stored, err := projects.GetWorkTarget(t.Context(), "mcp:project-context-owner", bind.WorkSessionID, bind.TargetID)
 	if err != nil || stored.Target.CWDRel != "backend" || stored.Target.ContextRevision != rebind.ContextRevision {
@@ -226,6 +225,29 @@ func TestProjectContextRefreshesOnlyBoundTargetAndRejectsRevokedTarget(t *testin
 	denied, err := server.callProjectContext(ctx, map[string]any{"work_session_id": bind.WorkSessionID, "target_id": bind.TargetID, "cwd_rel": "."})
 	if err == nil || denied["code"] != protocol.ErrorSessionTargetDenied {
 		t.Fatalf("revoked Target project_context = %#v err=%v", denied, err)
+	}
+}
+
+func TestProjectContextRevisionsIgnoreProjectRowMetadataRevision(t *testing.T) {
+	before := projectstore.Project{ID: "project_context_identity", Name: "Before", Revision: "rev-1", OrchestrationPolicy: "old guidance", Enabled: true}
+	after := before
+	after.Name = "After"
+	after.Revision = "rev-99"
+	after.OrchestrationPolicy = "new guidance"
+	deployment := projectstore.Deployment{ID: "deployment_context_identity", NodeID: "node_context_identity", AppliedRevision: "rev-7"}
+	permissions := protocol.DeploymentPermissions{Files: protocol.FileCapabilityReadWrite, Shell: true}
+	prompt := protocol.ProjectPrompt{PromptRevision: "sha256:prompt-context-identity", Complete: true, Sources: []protocol.PromptSource{}}
+	scopes := []protocol.PromptScopeRevision{{Scope: ".", PromptRevision: prompt.PromptRevision}}
+	provenance := projectTestSourceProvenance()
+
+	beforeTarget := projectTargetContextRevision(before, deployment, permissions, ".", prompt, scopes, provenance)
+	afterTarget := projectTargetContextRevision(after, deployment, permissions, ".", prompt, scopes, provenance)
+	if beforeTarget != afterTarget {
+		t.Fatalf("Project row metadata changed Target execution context: before=%q after=%q", beforeTarget, afterTarget)
+	}
+	targets := []projectstore.WorkTarget{{Target: protocol.WorkTarget{ID: "target_context_identity", DeploymentID: deployment.ID, ContextRevision: beforeTarget}}}
+	if beforeSession, afterSession := projectSessionContextRevision(before, targets), projectSessionContextRevision(after, targets); beforeSession != afterSession {
+		t.Fatalf("Project row metadata changed WorkSession context: before=%q after=%q", beforeSession, afterSession)
 	}
 }
 
@@ -376,7 +398,8 @@ func TestProjectListDoesNotInvokeNodeOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	normalized := assertCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectList, result)
-	if normalized["count"].(float64) < 1 {
+	projects, ok := normalized["projects"].([]any)
+	if !ok || len(projects) < 1 {
 		t.Fatalf("project_list = %#v", normalized)
 	}
 	_ = socket.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
@@ -468,17 +491,6 @@ func TestNodeToolRejectsInvalidProjectRoutingBeforeNodeInvoke(t *testing.T) {
 				if _, err := projects.UpdateDeployment(t.Context(), project.ID, deployment.ID, projectstore.UpdateDeploymentInput{
 					ExpectedRevision: deployment.DesiredRevision, WorkingFolder: deployment.WorkingFolder, Role: deployment.Role, Purpose: deployment.Purpose,
 					Permissions: deployment.Permissions, Enabled: deployment.Enabled,
-				}); err != nil {
-					t.Fatal(err)
-				}
-				return server.callNodeTool(ctx, "read_file", map[string]any{"work_session_id": bind.WorkSessionID, "target_id": bind.TargetID, "path": "README.md"})
-			},
-		},
-		{
-			name: "stale_project_context", code: protocol.ErrorContextRefreshRequired,
-			call: func(t *testing.T, server *Server, projects *projectstore.Store, project projectstore.Project, _ projectstore.Deployment, ctx context.Context, bind protocol.ProjectTargetBindRequest) (*mcpsdk.CallToolResult, error) {
-				if _, err := projects.UpdateProject(t.Context(), project.ID, projectstore.UpdateProjectInput{
-					ExpectedRevision: project.Revision, Name: project.Name + " updated", OrchestrationPolicy: project.OrchestrationPolicy, Enabled: true,
 				}); err != nil {
 					t.Fatal(err)
 				}

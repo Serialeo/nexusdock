@@ -97,7 +97,13 @@ func (s *Server) runtimeMCPManage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nodeID := r.PathValue("nodeID")
-	payload, err := s.runtimePost(r.Context(), nodeID, "/internal/runtime/mcp", request)
+	var payload map[string]any
+	var err error
+	if request.Action == "refresh" {
+		payload, err = s.runtimePostPreservingParentDeadline(r.Context(), nodeID, "/internal/runtime/mcp", request)
+	} else {
+		payload, err = s.runtimePost(r.Context(), nodeID, "/internal/runtime/mcp", request)
+	}
 	if err != nil {
 		writeJSON(w, runtimeErrorHTTPStatus(err), runtimeUnavailablePayload(err))
 		return

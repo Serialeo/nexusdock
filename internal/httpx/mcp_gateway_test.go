@@ -2,6 +2,8 @@ package httpx
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -16,6 +18,49 @@ import (
 	"github.com/uvwt/nexusdock/internal/recall"
 	"github.com/uvwt/nexusdock/internal/versioning"
 )
+
+func TestToolArgumentsReportsMalformedJSONDetails(t *testing.T) {
+	raw := json.RawMessage(`{"path":`)
+	_, err := toolArguments(&mcpsdk.CallToolRequest{
+		Params: &mcpsdk.CallToolParamsRaw{Arguments: raw},
+	})
+	if err == nil {
+		t.Fatal("malformed tool arguments were accepted")
+	}
+	message := err.Error()
+	for _, want := range []string{fmt.Sprintf("(%d bytes, offset %d)", len(raw), len(raw)), "unexpected end of JSON input"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("malformed argument error %q does not contain %q", message, want)
+		}
+	}
+}
+
+func TestGatewayToolResultPreservesCompactFileEditEnvelope(t *testing.T) {
+	diff := strings.Repeat("+large diff line\n", 700)
+	result, err := gatewayToolResult("file_edit", map[string]any{
+		"isError": false,
+		"structuredContent": map[string]any{
+			"action": "add", "path": "transform_full_multikappa.py", "changed": true,
+			"files_changed": 1, "insertions": 217, "deletions": 0,
+			"summary": "updated transform_full_multikappa.py", "diff_preview": diff,
+		},
+		"content": []map[string]any{{"type": "text", "text": "updated transform_full_multikappa.py"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, ok := result.Content[0].(*mcpsdk.TextContent)
+	if !ok || content.Text != "updated transform_full_multikappa.py" {
+		t.Fatalf("proxied content = %#v", result.Content)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(encoded), "+large diff line"); got != 700 {
+		t.Fatalf("proxied file_edit diff marker count = %d, want 700", got)
+	}
+}
 
 func TestInitializeMCPGatewayHasNoBuiltInInstructions(t *testing.T) {
 	server := &Server{mcpTools: make(map[string]publishedNodeTool), mcpResources: make(map[string]struct{})}
@@ -321,6 +366,47 @@ func TestCallNodeToolAcceptsSameContractWithDifferentDescription(t *testing.T) {
 	details := result.StructuredContent.(map[string]any)
 	if details["error"] != agentdock.ErrNodeOffline.Error() {
 		t.Fatalf("expected compatible contract to reach hub, got %#v", details)
+	}
+}
+
+func TestCallNodeToolIgnoresUnrelatedProjectRowRevisionChanges(t *testing.T) {
+	store, projects := newNodeRoutingTestStores(t)
+	descriptor := agentdock.ToolDescriptor{
+		Name:        "read_file",
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}},
+	}
+	node := pairHTTPTestNode(t, store, "device_project_revision_independent", "RevisionIndependent", "1.8.3", descriptor)
+	server := &Server{
+		agentDock: store, agentDockHub: agentdock.NewHub(store), projects: projects,
+		mcpServer: mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test", Version: "1"}, nil), mcpTools: make(map[string]publishedNodeTool),
+	}
+	server.registerNodeTools(node, agentdock.Hello{Tools: []agentdock.ToolDescriptor{descriptor}})
+	ctx, route := bindNodeRoutingTargetForTest(t, projects, node)
+	session, err := projects.GetWorkSession(t.Context(), "mcp:test-owner", route["work_session_id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := projects.GetProject(t.Context(), session.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projects.UpdateProject(t.Context(), project.ID, projectstore.UpdateProjectInput{
+		ExpectedRevision: project.Revision, Name: project.Name + " renamed", OrchestrationPolicy: "new collaboration guidance", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	route["path"] = "/tmp/a"
+	result, err := server.callNodeTool(ctx, "read_file", route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatalf("offline test target unexpectedly succeeded: %#v", result)
+	}
+	details := result.StructuredContent.(map[string]any)
+	if details["error"] != agentdock.ErrNodeOffline.Error() {
+		t.Fatalf("unrelated Project edit blocked Target before invocation: %#v", details)
 	}
 }
 

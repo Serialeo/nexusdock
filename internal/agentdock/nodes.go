@@ -47,7 +47,7 @@ type Node struct {
 	OS               string     `json:"os,omitempty"`
 	Arch             string     `json:"arch,omitempty"`
 	Capabilities     []string   `json:"capabilities"`
-	ToolContractHash string     `json:"tool_contract_hash,omitempty"`
+	ToolContractHash string     `json:"-"`
 	Online           bool       `json:"online"`
 	LastSeenAt       *time.Time `json:"last_seen_at,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`

@@ -3,6 +3,7 @@ import { Cable, CirclePlus, KeyRound, Link, Power, RefreshCw, Server, Terminal, 
 import { ApiError, api } from '../../api/client';
 import Dialog from '../Dialog';
 import MobileDrilldownBar from '../MobileDrilldownBar';
+import { mcpRefreshRequestTimeout } from './mcpTimeout';
 
 type MCPServer = {
   name: string;
@@ -25,6 +26,7 @@ type MCPConfig = {
   cwd?: string;
   header_env?: Record<string, string>;
   env_from_env?: Record<string, string>;
+  timeout_ms?: number;
 };
 
 type MCPListResponse = { ok: boolean; servers: MCPServer[]; count: number };
@@ -130,7 +132,11 @@ export default function MCPPage({ nodeID, refreshToken }: { nodeID: string; refr
     setBusy(`${action}:${name}`);
     setNotice(null);
     try {
-      await api(`${runtimeBase}/mcp`, { method: 'POST', body: JSON.stringify({ action, name, ...payload }), timeoutMs: action === 'refresh' ? 60_000 : 15_000 });
+      await api(`${runtimeBase}/mcp`, {
+        method: 'POST',
+        body: JSON.stringify({ action, name, ...payload }),
+        timeoutMs: action === 'refresh' ? mcpRefreshRequestTimeout(payload.timeout_ms) : 15_000,
+      });
       await loadServers(name);
       if (action !== 'remove') await loadDetail(name);
       setNotice({ tone: 'success', text: actionMessage(action, name) });
@@ -232,7 +238,7 @@ export default function MCPPage({ nodeID, refreshToken }: { nodeID: string; refr
           onEnvValue={setEnvValue}
           onSaveEnvironment={saveEnvironment}
           onRemoveEnvironment={removeEnvironment}
-          onRefresh={() => void manage('refresh', selected.name)}
+          onRefresh={() => void manage('refresh', selected.name, { timeout_ms: detail.config.timeout_ms || 30_000 })}
           onToggle={() => void manage(selected.enabled ? 'disable' : 'enable', selected.name)}
           onRemove={() => setRemoveTarget(selected)}
         /> : <div className="mcp-empty is-detail"><Server size={28} /><strong>选择 MCP 服务</strong><span>查看连接信息、工具数量和隔离环境变量。</span></div>}

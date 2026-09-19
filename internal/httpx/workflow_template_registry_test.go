@@ -63,8 +63,8 @@ func TestWorkflowTemplatePublishNormalizesLifecycleMetadata(t *testing.T) {
 	if result.Template.Status != workflowTemplateActive || result.Template.RetiredAt != nil || result.Template.PublishedAt == nil {
 		t.Fatalf("publish did not normalize lifecycle metadata: %#v", result.Template)
 	}
-	if result.Template.Hash != workflowTemplateHash(result.Template) || result.Template.Hash == "sha256:caller-controlled" {
-		t.Fatalf("publish hash=%q is not server generated", result.Template.Hash)
+	if result.Template.Hash != "" || strings.Contains(response.Body.String(), "sha256:") || strings.Contains(response.Body.String(), `"hash"`) {
+		t.Fatalf("publish response exposed registry hash: %s", response.Body.String())
 	}
 }
 

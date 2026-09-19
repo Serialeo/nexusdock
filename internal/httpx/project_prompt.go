@@ -2,8 +2,10 @@ package httpx
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -13,10 +15,10 @@ import (
 )
 
 type projectPromptWriteRequest struct {
-	Scope          string `json:"scope"`
-	Content        string `json:"content"`
-	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
-	Create         bool   `json:"create"`
+	Scope           string `json:"scope"`
+	Content         string `json:"content"`
+	ExpectedContent string `json:"expected_content,omitempty"`
+	Create          bool   `json:"create"`
 }
 
 func (s *Server) projectPromptPreview(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +46,7 @@ func (s *Server) projectPromptPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "project_id": deployment.ProjectID, "deployment": deployment,
-		"working_folder": deployment.WorkingFolder, "result": decoded,
+		"working_folder": deployment.WorkingFolder, "result": projectPromptLoadAdminView(decoded),
 	})
 }
 
@@ -65,7 +67,7 @@ func (s *Server) projectPromptWrite(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	result, err := s.agentDockHub.Invoke(invokeCtx, deployment.NodeID, protocol.OperationProjectPromptWrite, protocol.ProjectPromptWriteRequest{
 		DeploymentID: deployment.ID, DeploymentRevision: deployment.AppliedRevision,
-		Scope: request.Scope, Content: request.Content, ExpectedSHA256: strings.TrimSpace(request.ExpectedSHA256), Create: request.Create,
+		Scope: request.Scope, Content: request.Content, ExpectedSHA256: expectedProjectPromptSHA(request.ExpectedContent, request.Create), Create: request.Create,
 	})
 	if err != nil {
 		writeProjectPromptError(w, err)
@@ -78,8 +80,39 @@ func (s *Server) projectPromptWrite(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "project_id": deployment.ProjectID, "deployment": deployment,
-		"working_folder": deployment.WorkingFolder, "result": decoded,
+		"working_folder": deployment.WorkingFolder, "result": projectPromptWriteAdminView(decoded),
 	})
+}
+
+func expectedProjectPromptSHA(expectedContent string, create bool) string {
+	if create {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(expectedContent))
+	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
+func projectPromptSourceAdminView(source protocol.PromptSource) map[string]any {
+	return map[string]any{"path": source.Path, "scope": source.Scope, "bytes": source.Bytes, "content": source.Content}
+}
+
+func projectPromptAdminView(prompt protocol.ProjectPrompt) map[string]any {
+	sources := make([]map[string]any, 0, len(prompt.Sources))
+	for _, source := range prompt.Sources {
+		sources = append(sources, projectPromptSourceAdminView(source))
+	}
+	return map[string]any{"complete": prompt.Complete, "bytes": prompt.Bytes, "sources": sources}
+}
+
+func projectPromptLoadAdminView(result protocol.ProjectPromptLoadResult) map[string]any {
+	return map[string]any{"deployment_id": result.DeploymentID, "cwd_rel": result.CWDRel, "prompt": projectPromptAdminView(result.Prompt)}
+}
+
+func projectPromptWriteAdminView(result protocol.ProjectPromptWriteResult) map[string]any {
+	return map[string]any{
+		"deployment_id": result.DeploymentID, "scope": result.Scope, "source": projectPromptSourceAdminView(result.Source),
+		"prompt": projectPromptAdminView(result.Prompt), "created": result.Created,
+	}
 }
 
 func (s *Server) projectPromptReadyDeployment(w http.ResponseWriter, r *http.Request) (projectstore.Deployment, bool) {

@@ -134,7 +134,7 @@ func (s *Server) workflowTemplatePublish(w http.ResponseWriter, r *http.Request)
 		writeWorkflowOperationError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "template": t, "template_summary": s.workflowTemplateSummary(t), "source": "nexus-registry"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "template": workflowTemplatePublicView(t), "template_summary": s.workflowTemplateSummary(t), "source": "nexus-registry"})
 }
 
 func (s *Server) workflowTemplateRetire(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +145,7 @@ func (s *Server) workflowTemplateRetire(w http.ResponseWriter, r *http.Request) 
 		writeWorkflowOperationError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "template": t, "template_summary": s.workflowTemplateSummary(t), "source": "nexus-registry"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "template": workflowTemplatePublicView(t), "template_summary": s.workflowTemplateSummary(t), "source": "nexus-registry"})
 }
 
 func (s *Server) publishWorkflowTemplateValue(input workflowTemplate) (workflowTemplate, error) {
@@ -222,7 +222,7 @@ func (s *Server) workflowTemplateRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "WORKFLOW_TEMPLATE_NOT_FOUND", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "template": t, "template_summary": s.workflowTemplateSummary(t), "source": "nexus-registry"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "template": workflowTemplatePublicView(t), "template_summary": s.workflowTemplateSummary(t), "source": "nexus-registry"})
 }
 
 func (s *Server) workflowTemplatesList(w http.ResponseWriter, r *http.Request) {
@@ -861,10 +861,16 @@ func workflowTemplateSummaryFromTemplate(t workflowTemplate) workflowTemplateSum
 	return workflowTemplateSummary{ID: t.ID, Version: t.Version, Title: firstNonEmptyString(t.Title, t.ID), Description: t.Description, Status: string(t.Status), FileName: fileName, Path: filepath.ToSlash(filepath.Join("workflow-templates", "published", fileName)), StepCount: len(t.Steps), Keywords: t.Match.Keywords}
 }
 
+func workflowTemplatePublicView(t workflowTemplate) workflowTemplate {
+	// Content hashes are registry integrity metadata, not product information.
+	t.Hash = ""
+	return t
+}
+
 func workflowTemplateCompactList(templates []workflowTemplate) []map[string]any {
 	out := make([]map[string]any, 0, len(templates))
 	for _, t := range templates {
-		out = append(out, map[string]any{"id": t.ID, "version": t.Version, "title": t.Title, "description": t.Description, "status": t.Status, "match": t.Match, "completion_conditions": t.CompletionConditions, "steps": t.Steps, "step_count": len(t.Steps), "hash": t.Hash, "published_at": t.PublishedAt, "retired_at": t.RetiredAt})
+		out = append(out, map[string]any{"id": t.ID, "version": t.Version, "title": t.Title, "description": t.Description, "status": t.Status, "match": t.Match, "completion_conditions": t.CompletionConditions, "steps": t.Steps, "step_count": len(t.Steps), "published_at": t.PublishedAt, "retired_at": t.RetiredAt})
 	}
 	return out
 }

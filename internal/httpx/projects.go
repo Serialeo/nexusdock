@@ -550,7 +550,7 @@ func writeProjectError(w http.ResponseWriter, err error) {
 	case errors.Is(err, projectstore.ErrDuplicateNode):
 		writeError(w, http.StatusConflict, "DEPLOYMENT_NODE_EXISTS", err.Error())
 	case errors.As(err, &conflict):
-		writeJSON(w, http.StatusPreconditionFailed, map[string]any{"ok": false, "error": map[string]any{"code": "REVISION_CONFLICT", "message": "资源已被其他编辑器更新，请重新读取后再保存", "details": map[string]any{"resource": conflict.Resource, "current_revision": conflict.Current}}})
+		writeJSON(w, http.StatusPreconditionFailed, map[string]any{"ok": false, "error": map[string]any{"code": "REVISION_CONFLICT", "message": "资源已被其他编辑器更新，请重新读取后再保存", "details": map[string]any{"resource": conflict.Resource}}})
 	case errors.As(err, &validation):
 		writeError(w, http.StatusBadRequest, "INVALID_PROJECT", validation.Error())
 	default:

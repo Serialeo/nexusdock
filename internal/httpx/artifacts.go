@@ -34,58 +34,46 @@ const (
 )
 
 func (s *Server) decorateArtifactToolResult(nodeID string, envelope map[string]any) error {
-	if strings.TrimSpace(s.cfg.PublicURL) == "" || envelope == nil {
+	if envelope == nil {
 		return nil
 	}
 	structured, ok := envelope["structuredContent"].(map[string]any)
 	if !ok {
 		return nil
 	}
+	// Artifact checksums remain an internal integrity detail. Strip them from
+	// model-visible results even when an older AgentDock still sends the field.
+	delete(structured, "sha256")
+	if strings.TrimSpace(s.cfg.PublicURL) == "" {
+		return nil
+	}
 	artifactID, _ := structured["artifact_id"].(string)
 	filename, _ := structured["filename"].(string)
-	sha, _ := structured["sha256"].(string)
-	sha = strings.ToLower(strings.TrimSpace(sha))
 	expiresText, _ := structured["expires_at"].(string)
-	if artifactID == "" || filename == "" || !validArtifactSHA(sha) || expiresText == "" {
+	if artifactID == "" || filename == "" || expiresText == "" {
 		return nil
 	}
 	expiresAt, err := time.Parse(time.RFC3339Nano, expiresText)
 	if err != nil || !expiresAt.After(time.Now().UTC()) {
 		return nil
 	}
-	publicURL, err := s.signedArtifactURL(nodeID, artifactID, filename, sha, expiresAt.Unix())
+	publicURL, err := s.signedArtifactURL(nodeID, artifactID, filename, expiresAt.Unix())
 	if err != nil {
 		return err
 	}
 	structured["url"] = publicURL
 	structured["download_via"] = "nexusdock"
-	refreshEnvelopeTextContent(envelope, structured)
 	return nil
 }
 
-func refreshEnvelopeTextContent(envelope, structured map[string]any) {
-	content, ok := envelope["content"].([]any)
-	if !ok {
-		return
-	}
-	for _, item := range content {
-		block, ok := item.(map[string]any)
-		if ok && block["type"] == "text" {
-			block["text"] = prettyJSON(structured)
-			return
-		}
-	}
-}
-
-func (s *Server) signedArtifactURL(nodeID, artifactID, filename, sha string, expires int64) (string, error) {
+func (s *Server) signedArtifactURL(nodeID, artifactID, filename string, expires int64) (string, error) {
 	secret, err := s.artifactSigningSecret()
 	if err != nil {
 		return "", err
 	}
-	signature := signArtifactURL(secret, nodeID, artifactID, filename, sha, expires)
+	signature := signArtifactURL(secret, nodeID, artifactID, filename, expires)
 	query := url.Values{
 		"expires": {strconv.FormatInt(expires, 10)},
-		"sha256":  {sha},
 		"sig":     {signature},
 	}
 	base := strings.TrimRight(strings.TrimSpace(s.cfg.PublicURL), "/")
@@ -102,9 +90,8 @@ func (s *Server) servePublicArtifact(w http.ResponseWriter, r *http.Request) {
 	artifactID := strings.TrimSpace(r.PathValue("artifactID"))
 	filename := strings.TrimSpace(r.PathValue("filename"))
 	expires, parseErr := strconv.ParseInt(r.URL.Query().Get("expires"), 10, 64)
-	sha := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sha256")))
 	signature := strings.TrimSpace(r.URL.Query().Get("sig"))
-	if nodeID == "" || artifactID == "" || filename == "" || parseErr != nil || expires <= 0 || !validArtifactSHA(sha) || signature == "" {
+	if nodeID == "" || artifactID == "" || filename == "" || parseErr != nil || expires <= 0 || signature == "" {
 		http.NotFound(w, r)
 		return
 	}
@@ -117,7 +104,7 @@ func (s *Server) servePublicArtifact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ARTIFACT_SECRET_FAILED", "Artifact download is temporarily unavailable")
 		return
 	}
-	expected := signArtifactURL(secret, nodeID, artifactID, filename, sha, expires)
+	expected := signArtifactURL(secret, nodeID, artifactID, filename, expires)
 	if !hmac.Equal([]byte(expected), []byte(signature)) {
 		http.NotFound(w, r)
 		return
@@ -140,7 +127,7 @@ func (s *Server) servePublicArtifact(w http.ResponseWriter, r *http.Request) {
 			s.writeArtifactBridgeError(w, readErr)
 			return
 		}
-		if err := validateArtifactChunk(chunk, artifactID, filename, sha, expires, 0, true); err != nil {
+		if err := validateArtifactChunk(chunk, artifactID, filename, "", expires, 0, true); err != nil {
 			writeError(w, http.StatusBadGateway, "ARTIFACT_NODE_RESPONSE_INVALID", err.Error())
 			return
 		}
@@ -158,7 +145,7 @@ func (s *Server) servePublicArtifact(w http.ResponseWriter, r *http.Request) {
 		s.writeArtifactBridgeError(w, err)
 		return
 	}
-	if err := validateArtifactChunk(first, artifactID, filename, sha, expires, 0, false); err != nil {
+	if err := validateArtifactChunk(first, artifactID, filename, "", expires, 0, false); err != nil {
 		writeError(w, http.StatusBadGateway, "ARTIFACT_NODE_RESPONSE_INVALID", err.Error())
 		return
 	}
@@ -195,7 +182,7 @@ func (s *Server) servePublicArtifact(w http.ResponseWriter, r *http.Request) {
 			s.artifactLogger().Error("AgentDock Artifact size changed between chunks", "node_id", nodeID, "artifact_id", artifactID, "offset", offset, "first_size", first.Size, "chunk_size", chunk.Size)
 			panic(http.ErrAbortHandler)
 		}
-		if err := validateArtifactChunk(chunk, artifactID, filename, sha, expires, offset, false); err != nil {
+		if err := validateArtifactChunk(chunk, artifactID, filename, first.SHA256, expires, offset, false); err != nil {
 			s.artifactLogger().Error("validate AgentDock Artifact chunk", "node_id", nodeID, "artifact_id", artifactID, "offset", offset, "error", err)
 			panic(http.ErrAbortHandler)
 		}
@@ -213,7 +200,7 @@ func (s *Server) servePublicArtifact(w http.ResponseWriter, r *http.Request) {
 		pending = data
 		offset = chunk.NextOffset
 	}
-	if offset != first.Size || hex.EncodeToString(hasher.Sum(nil)) != sha {
+	if offset != first.Size || hex.EncodeToString(hasher.Sum(nil)) != strings.ToLower(first.SHA256) {
 		s.artifactLogger().Error("AgentDock Artifact stream checksum mismatch", "node_id", nodeID, "artifact_id", artifactID, "bytes", offset)
 		panic(http.ErrAbortHandler)
 	}
@@ -240,8 +227,12 @@ func decodeArtifactChunkData(chunk agentdock.ArtifactChunk, offset int64) ([]byt
 }
 
 func validateArtifactChunk(chunk agentdock.ArtifactChunk, artifactID, filename, sha string, expires, offset int64, metadataOnly bool) error {
-	if chunk.ArtifactID != artifactID || chunk.Filename != filename || strings.ToLower(chunk.SHA256) != sha || chunk.ExpiresAt.Unix() != expires {
+	chunkSHA := strings.ToLower(strings.TrimSpace(chunk.SHA256))
+	if chunk.ArtifactID != artifactID || chunk.Filename != filename || !validArtifactSHA(chunkSHA) || chunk.ExpiresAt.Unix() != expires {
 		return errors.New("AgentDock Artifact metadata does not match the signed URL")
+	}
+	if strings.TrimSpace(sha) != "" && chunkSHA != strings.ToLower(strings.TrimSpace(sha)) {
+		return errors.New("AgentDock Artifact checksum changed between chunks")
 	}
 	if chunk.Size < 0 || chunk.Offset != offset {
 		return errors.New("AgentDock Artifact size or offset is invalid")
@@ -409,9 +400,9 @@ func syncDirectoryBestEffort(path string) {
 	_ = dir.Close()
 }
 
-func signArtifactURL(secret []byte, nodeID, artifactID, filename, sha string, expires int64) string {
+func signArtifactURL(secret []byte, nodeID, artifactID, filename string, expires int64) string {
 	mac := hmac.New(sha256.New, secret)
-	_, _ = fmt.Fprintf(mac, "%s\x00%s\x00%s\x00%s\x00%d", nodeID, artifactID, filename, sha, expires)
+	_, _ = fmt.Fprintf(mac, "%s\x00%s\x00%s\x00%d", nodeID, artifactID, filename, expires)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 

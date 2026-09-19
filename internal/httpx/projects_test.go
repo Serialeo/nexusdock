@@ -70,7 +70,7 @@ func TestProjectAdminAPIAuthStrictJSONCASAndOfflineDesiredState(t *testing.T) {
 		t.Fatalf("renamed project = %#v", renamed)
 	}
 	stale := projectAPIRequest(t, handler, http.MethodPut, "/v1/projects/"+project.ID, `{"expected_revision":"rev-1","name":"Stale","orchestration_policy":"","enabled":true}`)
-	if stale.Code != http.StatusPreconditionFailed || !strings.Contains(stale.Body.String(), `"current_revision":"rev-2"`) {
+	if stale.Code != http.StatusPreconditionFailed || strings.Contains(stale.Body.String(), "current_revision") {
 		t.Fatalf("stale project update status=%d body=%s", stale.Code, stale.Body.String())
 	}
 
@@ -112,7 +112,7 @@ func TestProjectAdminAPIAuthStrictJSONCASAndOfflineDesiredState(t *testing.T) {
 		t.Fatalf("updated deployment = %#v", updatedDeployment)
 	}
 	staleDeploymentResponse := projectAPIRequest(t, handler, http.MethodPut, "/v1/projects/"+project.ID+"/deployments/"+deployment.ID, string(updateBody))
-	if staleDeploymentResponse.Code != http.StatusPreconditionFailed || !strings.Contains(staleDeploymentResponse.Body.String(), `"current_revision":"rev-2"`) {
+	if staleDeploymentResponse.Code != http.StatusPreconditionFailed || strings.Contains(staleDeploymentResponse.Body.String(), "current_revision") {
 		t.Fatalf("stale deployment update status=%d body=%s", staleDeploymentResponse.Code, staleDeploymentResponse.Body.String())
 	}
 

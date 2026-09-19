@@ -8,6 +8,7 @@ import (
 	protocol "github.com/Serialeo/agentdock-protocol"
 	"github.com/Serialeo/agentdock-protocol/mcpcontract"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/uvwt/nexusdock/internal/mcpresult"
 )
 
 func TestCentralToolDefinitionsMatchCanonicalContract(t *testing.T) {
@@ -35,7 +36,7 @@ func TestCentralToolDefinitionsMatchCanonicalContract(t *testing.T) {
 		} else {
 			wantOutput, _ = mcpcontract.OutputSchema(name)
 		}
-		if !reflect.DeepEqual(tool.OutputSchema, wantOutput) {
+		if !reflect.DeepEqual(tool.OutputSchema, mcpresult.Schema(name, wantOutput)) {
 			t.Fatalf("%s output schema drifted from canonical contract", name)
 		}
 		wantAnnotations, _ := mcpcontract.AnnotationContract(name)
@@ -112,10 +113,13 @@ func TestCentralOutputContractKeepsRecallCitationAndRenderableFields(t *testing.
 	}
 
 	writeOutput := contractSchemaProperties(t, definitions["recall_write"].OutputSchema)
-	for _, field := range []string{"recall_target", "recall_action", "path", "changed", "dry_run", "confirmed", "written", "diff", "updates"} {
+	for _, field := range []string{"recall_target", "recall_action", "path", "changed", "dry_run", "written", "diff", "updates"} {
 		if _, ok := writeOutput[field]; !ok {
 			t.Fatalf("recall_write output missing %s", field)
 		}
+	}
+	if _, ok := writeOutput["confirmed"]; ok {
+		t.Fatal("recall_write output exposed input confirmation echo")
 	}
 
 	contextOutput := contractSchemaProperties(t, definitions["agentdock_context"].OutputSchema)

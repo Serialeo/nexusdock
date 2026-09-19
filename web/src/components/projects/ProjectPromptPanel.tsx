@@ -9,13 +9,11 @@ import { deploymentIsAvailable } from './projectUiModel';
 type PromptSource = {
   path: string;
   scope: string;
-  sha256: string;
   bytes: number;
   content: string;
 };
 
 type ProjectPrompt = {
-  prompt_revision: string;
   complete: boolean;
   bytes: number;
   sources: PromptSource[];
@@ -167,7 +165,7 @@ export default function ProjectPromptPanel({ projectID, deployments, nodes }: {
         body: JSON.stringify({
           scope: editor.scope,
           content: editor.content,
-          expected_sha256: editor.source?.sha256 || '',
+          expected_content: editor.source?.content || '',
           create: editor.create,
         }),
       });
@@ -185,7 +183,7 @@ export default function ProjectPromptPanel({ projectID, deployments, nodes }: {
       setResult(nextResult);
       setCWDRel(response.result.scope);
       setSelectedSourcePath(response.result.source.path);
-      setNotice(response.result.created ? `${response.result.source.path} 已创建。活动 Target 需刷新 context 后才能使用新 revision。` : `${response.result.source.path} 已保存。活动 Target 需刷新 context 后才能使用新 revision。`);
+      setNotice(response.result.created ? `${response.result.source.path} 已创建。活动 Target 在下次使用前会刷新规则。` : `${response.result.source.path} 已保存。活动 Target 在下次使用前会刷新规则。`);
       setEditor(null);
     } catch (cause) {
       setEditorError(messageOf(cause));
@@ -213,11 +211,10 @@ export default function ProjectPromptPanel({ projectID, deployments, nodes }: {
         <span><small>实际 cwd</small><code>{result.result.cwd_rel}</code></span>
         <span><small>完整正文</small><strong>{result.result.prompt.complete ? '是' : '否'}</strong></span>
         <span><small>总字节</small><strong>{result.result.prompt.bytes.toLocaleString()}</strong></span>
-        <span><small>Prompt revision</small><code>{result.result.prompt.prompt_revision}</code></span>
       </section>
       {result.result.prompt.sources.length === 0 ? <section className="project-prompt-empty"><FileText size={25} /><strong>{hasProjectFolder ? '当前适用链没有 AGENTS.md' : '未配置 Project Folder'}</strong><span>{hasProjectFolder ? '缺失规则与读取失败是不同状态；这里表示 Node 已完整读取并确认没有适用规则文件。' : 'Folder 留空时不自动发现 Node 默认目录、HOME 或系统目录中的 AGENTS.md；Full Access 也不会扩大 Project Prompt 搜索范围。'}</span>{hasProjectFolder && <button type="button" className="nx-button" onClick={openCreate}><Plus size={15} />在 {result.result.cwd_rel} 创建 AGENTS.md</button>}</section> : <section className="project-prompt-workspace">
-        <aside className="project-prompt-sources"><header><strong>适用顺序</strong><small>root → cwd</small></header>{result.result.prompt.sources.map((source, index) => <button type="button" className={(selectedSource?.path === source.path) ? 'is-active' : ''} key={`${source.path}:${source.sha256}`} onClick={() => setSelectedSourcePath(source.path)}><span>{index + 1}</span><span><strong>{source.path}</strong><small>scope {source.scope} · {source.bytes} bytes</small></span></button>)}{!currentScopeSource && <button type="button" className="project-prompt-create-source" onClick={openCreate}><Plus size={14} /><span><strong>创建当前 scope 规则</strong><small>{result.result.cwd_rel}/AGENTS.md</small></span></button>}</aside>
-        <article className="project-prompt-preview">{selectedSource ? <><header><div><strong>{selectedSource.path}</strong><small>scope {selectedSource.scope}</small></div><button type="button" className="nx-button is-secondary is-small" onClick={() => openEdit(selectedSource)}><Pencil size={14} />编辑实际文件</button></header><dl><div><dt>SHA-256</dt><dd><code>{selectedSource.sha256}</code></dd></div><div><dt>Bytes</dt><dd>{selectedSource.bytes}</dd></div></dl><pre>{selectedSource.content}</pre></> : <div className="project-prompt-empty">选择一个规则来源查看完整正文。</div>}</article>
+        <aside className="project-prompt-sources"><header><strong>适用顺序</strong><small>root → cwd</small></header>{result.result.prompt.sources.map((source, index) => <button type="button" className={(selectedSource?.path === source.path) ? 'is-active' : ''} key={`${source.path}:${source.scope}:${index}`} onClick={() => setSelectedSourcePath(source.path)}><span>{index + 1}</span><span><strong>{source.path}</strong><small>scope {source.scope} · {source.bytes} bytes</small></span></button>)}{!currentScopeSource && <button type="button" className="project-prompt-create-source" onClick={openCreate}><Plus size={14} /><span><strong>创建当前 scope 规则</strong><small>{result.result.cwd_rel}/AGENTS.md</small></span></button>}</aside>
+        <article className="project-prompt-preview">{selectedSource ? <><header><div><strong>{selectedSource.path}</strong><small>scope {selectedSource.scope}</small></div><button type="button" className="nx-button is-secondary is-small" onClick={() => openEdit(selectedSource)}><Pencil size={14} />编辑实际文件</button></header><dl><div><dt>Bytes</dt><dd>{selectedSource.bytes}</dd></div></dl><pre>{selectedSource.content}</pre></> : <div className="project-prompt-empty">选择一个规则来源查看完整正文。</div>}</article>
       </section>}
       <div className="project-prompt-delivery-note">此页面是管理预览，只证明 Node 已读取完整 Project Prompt；不表示已返回 MCP Host，也不能证明 Host 采用了何种消息层级。</div>
     </>}
@@ -225,7 +222,7 @@ export default function ProjectPromptPanel({ projectID, deployments, nodes }: {
     {editor && <Dialog title={editor.create ? '创建 AGENTS.md' : `编辑 ${editor.source?.path || 'AGENTS.md'}`} description={`${node?.name || 'Node'} · ${deployment?.working_folder || '未配置 Project Folder'} · scope ${editor.scope}。正文直接写入目标 Node 项目目录，不复制到 Nexus 数据库。`} onClose={() => { if (!saving) setEditor(null); }} closeDisabled={saving} wide>
       <form className="project-prompt-editor" onSubmit={saveRule}>
         {editorError && <div className="nx-alert is-error" role="alert">{editorError}</div>}
-        <div className="project-prompt-editor-path"><span>目标文件</span><code>{editor.scope === '.' ? 'AGENTS.md' : `${editor.scope}/AGENTS.md`}</code>{editor.source && <small>CAS {editor.source.sha256}</small>}</div>
+        <div className="project-prompt-editor-path"><span>目标文件</span><code>{editor.scope === '.' ? 'AGENTS.md' : `${editor.scope}/AGENTS.md`}</code></div>
         <label><span>完整正文</span><textarea data-dialog-initial-focus rows={18} value={editor.content} onChange={(event) => setEditor((value) => value ? { ...value, content: event.target.value } : value)} spellCheck={false} /></label>
         <div className="project-prompt-editor-meta"><span>保存后已存在的 WorkSession/Target 不会被静默改写；执行前需刷新 context。</span><strong className={editorBytes > maxPromptFileBytes ? 'is-over-limit' : ''}>{editorBytes.toLocaleString()} / {maxPromptFileBytes.toLocaleString()} bytes</strong></div>
         <footer><button type="button" className="nx-button is-secondary" disabled={saving} onClick={() => setEditor(null)}>取消</button><button type="submit" className="nx-button" disabled={saving || editorBytes > maxPromptFileBytes}>{saving ? '保存中…' : editor.create ? '创建规则文件' : '保存规则文件'}</button></footer>

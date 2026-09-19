@@ -8,6 +8,7 @@ import (
 
 	"github.com/Serialeo/agentdock-protocol/mcpcontract"
 	jsonschema "github.com/google/jsonschema-go/jsonschema"
+	"github.com/uvwt/nexusdock/internal/mcpresult"
 	"github.com/uvwt/nexusdock/internal/privatenotes"
 	"github.com/uvwt/nexusdock/internal/recall"
 )
@@ -41,10 +42,16 @@ func assertCentralToolResultMatchesOutputSchema(t *testing.T, name string, resul
 	if err != nil {
 		t.Fatalf("resolve %s output schema: %v", name, err)
 	}
-	if err := resolved.Validate(normalized); err != nil {
+	projected := mcpresult.Project(name, normalized)
+	if err := resolved.Validate(projected); err != nil {
 		t.Fatalf("%s result violates output schema: %v\nresult: %s", name, err, encoded)
 	}
-	return normalized
+	return projected
+}
+
+func assertModelFacingCentralToolResultMatchesOutputSchema(t *testing.T, name string, result map[string]any) map[string]any {
+	t.Helper()
+	return assertCentralToolResultMatchesOutputSchema(t, name, result)
 }
 
 func TestCentralRuntimeOutputContractRecallSearch(t *testing.T) {
@@ -144,8 +151,13 @@ func TestCentralRuntimeOutputContractPrivateNoteSearchAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	normalizedSearch := assertCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolPrivateNoteManage, search)
-	if normalizedSearch["query"] != "no matching note" || normalizedSearch["root"] == "" || normalizedSearch["metadata_only"] != true {
-		t.Fatalf("private note search identity = %#v", normalizedSearch)
+	if results, ok := normalizedSearch["results"].([]any); !ok || len(results) != 0 {
+		t.Fatalf("private note search results = %#v", normalizedSearch)
+	}
+	for _, key := range []string{"query", "root", "metadata_only", "private_note_store", "recall_endpoint"} {
+		if _, exists := normalizedSearch[key]; exists {
+			t.Fatalf("private note search exposed %s: %#v", key, normalizedSearch)
+		}
 	}
 
 	status, err := server.callNexusTool(t.Context(), mcpcontract.ToolPrivateNoteManage, map[string]any{

@@ -3,6 +3,7 @@ package httpx
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -78,10 +79,7 @@ func TestProjectOpenMCPHandlerPersistsReturnedThenConsumesHostMetaAck(t *testing
 	if err := json.Unmarshal(bindInvoke.Arguments, &bind); err != nil {
 		t.Fatal(err)
 	}
-	writeProjectResult(t, socket, bindInvoke.RequestID, map[string]any{"target": map[string]any{
-		"work_session_id": bind.WorkSessionID, "target_id": bind.TargetID, "project_id": bind.ProjectID,
-		"deployment_id": bind.DeploymentID, "cwd_rel": bind.CWDRel, "deployment_revision": bind.DeploymentRevision, "context_revision": bind.ContextRevision,
-	}})
+	writeProjectResult(t, socket, bindInvoke.RequestID, projectTestTargetAcknowledgment(bind))
 
 	first := <-firstDone
 	if first.err != nil || first.result == nil || first.result.IsError {
@@ -91,7 +89,7 @@ func TestProjectOpenMCPHandlerPersistsReturnedThenConsumesHostMetaAck(t *testing
 	if !ok {
 		t.Fatalf("first structuredContent = %#v", first.result.StructuredContent)
 	}
-	firstNormalized := assertCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectOpen, structured)
+	firstNormalized := assertModelFacingCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectOpen, structured)
 	projectView := firstNormalized["project"].(map[string]any)
 	if projectView["orchestration_policy"] != project.OrchestrationPolicy {
 		t.Fatalf("model-visible orchestration_policy = %#v", projectView["orchestration_policy"])
@@ -101,7 +99,7 @@ func TestProjectOpenMCPHandlerPersistsReturnedThenConsumesHostMetaAck(t *testing
 		t.Fatalf("model-visible Deployment topology = %#v", deploymentViews)
 	}
 	deploymentView := deploymentViews[0].(map[string]any)
-	if deploymentView["working_folder"] != deployment.WorkingFolder || deploymentView["applied_revision"] != deployment.AppliedRevision {
+	if deploymentView["working_folder"] != deployment.WorkingFolder {
 		t.Fatalf("model-visible Deployment = %#v", deploymentView)
 	}
 	targetViews := firstNormalized["targets"].([]any)
@@ -111,14 +109,23 @@ func TestProjectOpenMCPHandlerPersistsReturnedThenConsumesHostMetaAck(t *testing
 	targetView := targetViews[0].(map[string]any)
 	promptView := targetView["prompt"].(map[string]any)
 	sources := promptView["sources"].([]any)
-	if len(sources) != 1 || sources[0].(map[string]any)["content"] != "root rules\n" || sources[0].(map[string]any)["sha256"] != "sha256:delivery-source" {
+	if len(sources) != 1 || sources[0].(map[string]any)["content"] != "root rules\n" {
 		t.Fatalf("model-visible full Prompt sources = %#v", sources)
 	}
+	if encoded, _ := json.Marshal(firstNormalized); strings.Contains(string(encoded), "sha256") || strings.Contains(string(encoded), "revision") {
+		t.Fatalf("model-visible project_open leaked internal hash/revision fields: %s", encoded)
+	}
 	workSessionID := firstNormalized["work_session_id"].(string)
-	contextRevision := firstNormalized["context_revision"].(string)
-	delivery := firstNormalized["delivery"].(map[string]any)
-	if delivery["status"] != string(protocol.ProjectContextReturned) || delivery["context_revision"] != contextRevision {
-		t.Fatalf("first delivery = %#v", delivery)
+	deliveryMeta, ok := first.result.Meta[protocol.ProjectContextDeliveryMetaKey].(map[string]any)
+	if !ok {
+		t.Fatalf("project_open private delivery meta = %#v", first.result.Meta)
+	}
+	contextRevision, _ := deliveryMeta["context_revision"].(string)
+	if _, exists := firstNormalized["delivery"]; exists {
+		t.Fatalf("project_open leaked host delivery state into model result: %#v", firstNormalized)
+	}
+	if contextRevision == "" || fmt.Sprint(deliveryMeta["status"]) != string(protocol.ProjectContextReturned) {
+		t.Fatalf("first private delivery meta = %#v", deliveryMeta)
 	}
 	persisted, err := projects.GetContextDelivery(t.Context(), ownerKey, workSessionID, "")
 	if err != nil || persisted.Status != protocol.ProjectContextReturned || persisted.ContextRevision != contextRevision {
@@ -135,10 +142,13 @@ func TestProjectOpenMCPHandlerPersistsReturnedThenConsumesHostMetaAck(t *testing
 		t.Fatalf("acknowledged project_open result=%#v err=%v", second, err)
 	}
 	secondStructured := second.StructuredContent.(map[string]any)
-	secondNormalized := assertCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectOpen, secondStructured)
-	secondDelivery := secondNormalized["delivery"].(map[string]any)
-	if secondDelivery["status"] != string(protocol.ProjectContextHostConsumed) || secondDelivery["context_revision"] != contextRevision {
-		t.Fatalf("acknowledged delivery = %#v", secondDelivery)
+	secondNormalized := assertModelFacingCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectOpen, secondStructured)
+	if _, exists := secondNormalized["delivery"]; exists {
+		t.Fatalf("acknowledged project_open leaked host delivery state: %#v", secondNormalized)
+	}
+	secondMeta, ok := second.Meta[protocol.ProjectContextDeliveryMetaKey].(map[string]any)
+	if !ok || fmt.Sprint(secondMeta["status"]) != string(protocol.ProjectContextHostConsumed) {
+		t.Fatalf("acknowledged private delivery meta = %#v", second.Meta)
 	}
 	consumed, err := projects.GetContextDelivery(t.Context(), ownerKey, workSessionID, "")
 	if err != nil || consumed.Status != protocol.ProjectContextHostConsumed || consumed.HostConsumedAt == nil {
@@ -197,12 +207,21 @@ func TestProjectOpenMCPHandlerPersistsReturnedThenConsumesHostMetaAck(t *testing
 	if contextResult.err != nil || contextResult.result == nil || contextResult.result.IsError {
 		t.Fatalf("first project_context MCP result=%#v err=%v", contextResult.result, contextResult.err)
 	}
-	contextStructured := assertCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectContext, contextResult.result.StructuredContent.(map[string]any))
+	contextStructured := assertModelFacingCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectContext, contextResult.result.StructuredContent.(map[string]any))
 	contextTarget := contextStructured["target"].(map[string]any)
-	targetContextRevision := contextTarget["context_revision"].(string)
-	contextDelivery := contextStructured["delivery"].(map[string]any)
-	if contextDelivery["status"] != string(protocol.ProjectContextReturned) || contextDelivery["context_revision"] != targetContextRevision {
-		t.Fatalf("first project_context delivery = %#v", contextDelivery)
+	if _, exists := contextTarget["context_revision"]; exists {
+		t.Fatalf("model-visible Target leaked context revision: %#v", contextTarget)
+	}
+	contextMeta, ok := contextResult.result.Meta[protocol.ProjectContextDeliveryMetaKey].(map[string]any)
+	if !ok {
+		t.Fatalf("project_context private delivery meta = %#v", contextResult.result.Meta)
+	}
+	targetContextRevision, _ := contextMeta["context_revision"].(string)
+	if _, exists := contextStructured["delivery"]; exists {
+		t.Fatalf("project_context leaked host delivery state into model result: %#v", contextStructured)
+	}
+	if targetContextRevision == "" || fmt.Sprint(contextMeta["status"]) != string(protocol.ProjectContextReturned) {
+		t.Fatalf("first project_context private delivery meta = %#v", contextMeta)
 	}
 	targetReturned, err := projects.GetContextDelivery(t.Context(), ownerKey, workSessionID, bind.TargetID)
 	if err != nil || targetReturned.Status != protocol.ProjectContextReturned || targetReturned.ContextRevision != targetContextRevision {
@@ -239,9 +258,13 @@ func TestProjectOpenMCPHandlerPersistsReturnedThenConsumesHostMetaAck(t *testing
 	if ackContextResult.err != nil || ackContextResult.result == nil || ackContextResult.result.IsError {
 		t.Fatalf("acknowledged project_context result=%#v err=%v", ackContextResult.result, ackContextResult.err)
 	}
-	ackContextStructured := assertCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectContext, ackContextResult.result.StructuredContent.(map[string]any))
-	if got := ackContextStructured["delivery"].(map[string]any)["status"]; got != string(protocol.ProjectContextHostConsumed) {
-		t.Fatalf("acknowledged Target delivery status = %#v", got)
+	ackContextStructured := assertModelFacingCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectContext, ackContextResult.result.StructuredContent.(map[string]any))
+	if _, exists := ackContextStructured["delivery"]; exists {
+		t.Fatalf("acknowledged project_context leaked host delivery state: %#v", ackContextStructured)
+	}
+	ackContextMeta, ok := ackContextResult.result.Meta[protocol.ProjectContextDeliveryMetaKey].(map[string]any)
+	if !ok || fmt.Sprint(ackContextMeta["status"]) != string(protocol.ProjectContextHostConsumed) {
+		t.Fatalf("acknowledged Target private delivery meta = %#v", ackContextResult.result.Meta)
 	}
 	targetConsumed, err := projects.GetContextDelivery(t.Context(), ownerKey, workSessionID, bind.TargetID)
 	if err != nil || targetConsumed.Status != protocol.ProjectContextHostConsumed || targetConsumed.HostConsumedAt == nil {
@@ -282,10 +305,13 @@ func TestProjectOpenMCPHandlerPersistsReturnedThenConsumesHostMetaAck(t *testing
 	if changedResult.err != nil || changedResult.result == nil || changedResult.result.IsError {
 		t.Fatalf("changed project_context result=%#v err=%v", changedResult.result, changedResult.err)
 	}
-	changedStructured := assertCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectContext, changedResult.result.StructuredContent.(map[string]any))
-	changedDelivery := changedStructured["delivery"].(map[string]any)
-	if changedDelivery["status"] != string(protocol.ProjectContextReturned) || changedDelivery["context_revision"] != changedRebind.ContextRevision {
-		t.Fatalf("changed Project Context did not reset delivery to returned: %#v", changedDelivery)
+	changedStructured := assertModelFacingCentralToolResultMatchesOutputSchema(t, mcpcontract.ToolProjectContext, changedResult.result.StructuredContent.(map[string]any))
+	if _, exists := changedStructured["delivery"]; exists {
+		t.Fatalf("changed project_context leaked host delivery state: %#v", changedStructured)
+	}
+	changedMeta, ok := changedResult.result.Meta[protocol.ProjectContextDeliveryMetaKey].(map[string]any)
+	if !ok || fmt.Sprint(changedMeta["status"]) != string(protocol.ProjectContextReturned) {
+		t.Fatalf("changed Project Context private delivery meta = %#v", changedResult.result.Meta)
 	}
 	changedStored, err := projects.GetContextDelivery(t.Context(), ownerKey, workSessionID, bind.TargetID)
 	if err != nil || changedStored.Status != protocol.ProjectContextReturned || changedStored.ContextRevision != changedRebind.ContextRevision || changedStored.HostConsumedAt != nil {
