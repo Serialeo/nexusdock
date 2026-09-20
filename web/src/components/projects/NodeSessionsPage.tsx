@@ -5,7 +5,6 @@ import { formatTime } from '../../lib/time';
 import type { DeploymentPermissions } from './ProjectsPage';
 import { projectSessionStatusTone } from './projectUiModel';
 
-type Delivery = { status: 'returned' | 'host_consumed'; returned_at: string; host_consumed_at?: string; updated_at: string };
 type NodeSession = {
   work_session_id: string;
   node_id: string;
@@ -13,7 +12,6 @@ type NodeSession = {
   status: string;
   created_at: string;
   updated_at: string;
-  delivery?: Delivery;
 };
 type Target = {
   target: {
@@ -23,12 +21,10 @@ type Target = {
     cwd_rel: string;
     status: string;
     permissions: DeploymentPermissions;
-    prompt: { complete: boolean; bytes: number; sources: Array<{ path: string; scope: string; bytes: number }> };
   };
   last_error?: string;
   created_at: string;
   updated_at: string;
-  delivery?: Delivery;
 };
 type ListResponse = { ok: boolean; sessions: NodeSession[]; count: number };
 type DetailResponse = { ok: boolean; session: NodeSession; targets: Target[] };
@@ -36,12 +32,6 @@ type DetailResponse = { ok: boolean; session: NodeSession; targets: Target[] };
 function messageOf(error: unknown): string {
   if (error instanceof ApiError) return `${error.code || error.status}：${error.message}`;
   return error instanceof Error ? error.message : '节点临时会话读取失败';
-}
-
-function deliveryText(delivery?: Delivery): string {
-  if (!delivery) return '尚未 returned';
-  if (delivery.status === 'host_consumed') return `host_consumed · ${formatTime(delivery.host_consumed_at || delivery.updated_at, { compact: true })}`;
-  return `returned · ${formatTime(delivery.returned_at, { compact: true })}`;
 }
 
 function permissionText(value: DeploymentPermissions): string {
@@ -117,20 +107,19 @@ export default function NodeSessionsPage() {
         <aside className="project-session-list" aria-busy={loading}>
           {loading && sessions.length === 0 && <div className="project-session-empty">正在读取节点临时会话…</div>}
           {!loading && sessions.length === 0 && <div className="project-session-empty">还没有节点临时会话。</div>}
-          {sessions.map((item) => <button type="button" className={item.work_session_id === selectedID ? 'is-active' : ''} key={item.work_session_id} onClick={() => setSelectedID(item.work_session_id)}><span><strong>{item.node_name || item.node_id}</strong><small>{item.status} · {formatTime(item.updated_at, { compact: true })}</small></span><em className={item.delivery?.status === 'host_consumed' ? 'is-ok' : item.delivery?.status === 'returned' ? 'is-warning' : 'is-muted'}>{deliveryText(item.delivery)}</em></button>)}
+          {sessions.map((item) => <button type="button" className={item.work_session_id === selectedID ? 'is-active' : ''} key={item.work_session_id} onClick={() => setSelectedID(item.work_session_id)}><span><strong>{item.node_name || item.node_id}</strong><small>{item.status} · {formatTime(item.updated_at, { compact: true })}</small></span></button>)}
         </aside>
         <article className="project-session-detail">
           {!selected && <div className="project-session-empty">选择一个 WorkSession 查看 Target。</div>}
           {selected && <>
             <header><div><h3>{selected.node_name || selected.node_id}</h3></div><span className={`project-state ${projectSessionStatusTone(selected.status)}`}>{selected.status}</span></header>
-            <section className="project-session-meta"><span><small>创建时间</small><strong>{formatTime(selected.created_at)}</strong></span><span><small>最近更新</small><strong>{formatTime(selected.updated_at)}</strong></span><span><small>上下文交付</small><strong>{deliveryText(selected.delivery)}</strong></span></section>
+            <section className="project-session-meta"><span><small>创建时间</small><strong>{formatTime(selected.created_at)}</strong></span><span><small>最近更新</small><strong>{formatTime(selected.updated_at)}</strong></span></section>
             {detailLoading && <div className="project-session-empty">正在读取 Target 详情…</div>}
             {detailError && <div className="nx-alert is-error">{detailError}</div>}
             {!detailLoading && detail && <section className="project-target-list">{detail.targets.map((item) => <article className="project-target-card" key={item.target.target_id}>
               <header><span><Server size={15} /><strong>{detail.session.node_name || detail.session.node_id}</strong><small>节点临时 Target</small></span><span className={`project-state ${projectSessionStatusTone(item.target.status)}`}>{item.target.status}</span></header>
-              <dl><div><dt>工作目录</dt><dd><code>{item.target.cwd_rel}</code></dd></div><div><dt>上下文交付</dt><dd>{deliveryText(item.delivery)}</dd></div><div><dt>权限</dt><dd>{permissionText(item.target.permissions)}</dd></div><div><dt>Prompt</dt><dd>{item.target.prompt.complete ? `完整 · ${item.target.prompt.bytes} bytes` : '不完整'}</dd></div></dl>
+              <dl><div><dt>工作目录</dt><dd><code>{item.target.cwd_rel}</code></dd></div><div><dt>权限</dt><dd>{permissionText(item.target.permissions)}</dd></div></dl>
               {item.last_error && <div className="nx-alert is-error">{item.last_error}</div>}
-              {item.target.prompt.sources.length !== 0 && <div className="nx-alert is-warning">该临时会话意外包含 Prompt 来源，请检查 Node 配置。</div>}
             </article>)}</section>}
           </>}
         </article>

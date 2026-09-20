@@ -197,7 +197,14 @@ export default function ProjectPromptPanel({ projectID, deployments, nodes }: {
 
   return <section className="project-prompt-panel">
     <header className="project-prompt-toolbar">
-      <label><span>Deployment</span><select value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}><option value="">选择 Deployment</option>{selectable.map((item) => { const itemNode = nodes.find((candidate) => candidate.id === item.node_id); return <option key={item.id} value={item.id}>{itemNode?.name || item.node_id} · {item.role || item.id}{deploymentIsAvailable(item, nodes) ? '' : ' · 当前不可读取'}</option>; })}</select></label>
+      <label><span>Deployment</span><select value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}><option value="">选择 Deployment</option>{selectable.map((item) => {
+        const itemNode = nodes.find((candidate) => candidate.id === item.node_id);
+        const nodeName = itemNode?.name || '未知节点';
+        const detail = item.role?.trim() || item.working_folder?.trim() || '';
+        const label = detail ? `${nodeName} · ${detail}` : nodeName;
+        const status = deploymentIsAvailable(item, nodes) ? '' : ' · 当前不可读取';
+        return <option key={item.id} value={item.id}>{label}{status}</option>;
+      })}</select></label>
       <form onSubmit={submitCWD}><label><span>项目内子目录</span><input value={cwdRel} onChange={(event) => setCWDRel(event.target.value)} placeholder="." spellCheck={false} /></label><button type="submit" className="nx-button is-secondary" disabled={loading || !deploymentID}><RefreshCw size={15} />刷新规则</button></form>
       <div className="project-prompt-target"><small>目标</small><strong>{node?.name || '未选择 Node'}</strong><code>{deployment?.working_folder || '未配置 Project Folder'}</code><span>{deploymentReady ? '已应用且在线' : '未就绪'}</span></div>
     </header>
