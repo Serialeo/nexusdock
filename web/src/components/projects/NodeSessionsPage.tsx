@@ -107,13 +107,12 @@ export default function NodeSessionsPage() {
 
   const selected = useMemo(() => sessions.find((item) => item.work_session_id === selectedID), [sessions, selectedID]);
   return <section className="project-detail-page">
-    <header className="project-detail-heading">
-      <div className="project-detail-title"><span className="nexus-eyebrow">WORK / SESSIONS</span><h2>节点临时会话</h2><p>仅展示通过 node_open 建立、且不属于用户 Project 的 WorkSession。</p></div>
-      <button type="button" className="nx-button is-secondary" disabled={loading} onClick={refreshSessions}><RefreshCw size={15} />刷新</button>
-    </header>
     {error && <div className="nx-alert is-error"><CircleAlert size={16} />{error}</div>}
     <section className="project-sessions-panel">
-      <header className="project-sessions-heading"><div><Waypoints size={18} /><span><strong>Node Sessions</strong><small>权限来自设置中的节点临时会话配置；不会加载 Project AGENTS.md。</small></span></div></header>
+      <header className="project-sessions-heading">
+        <div><Waypoints size={18} /><span><strong>Node Sessions</strong></span></div>
+        <button type="button" className="nx-button is-secondary is-small" disabled={loading} onClick={refreshSessions}><RefreshCw size={14} />刷新</button>
+      </header>
       <section className="project-sessions-workspace">
         <aside className="project-session-list" aria-busy={loading}>
           {loading && sessions.length === 0 && <div className="project-session-empty">正在读取节点临时会话…</div>}
@@ -123,9 +122,8 @@ export default function NodeSessionsPage() {
         <article className="project-session-detail">
           {!selected && <div className="project-session-empty">选择一个 WorkSession 查看 Target。</div>}
           {selected && <>
-            <header><div><span className="nexus-eyebrow">NODE SESSION</span><h3>{selected.node_name || selected.node_id}</h3></div><span className={`project-state ${projectSessionStatusTone(selected.status)}`}>{selected.status}</span></header>
+            <header><div><h3>{selected.node_name || selected.node_id}</h3></div><span className={`project-state ${projectSessionStatusTone(selected.status)}`}>{selected.status}</span></header>
             <section className="project-session-meta"><span><small>创建时间</small><strong>{formatTime(selected.created_at)}</strong></span><span><small>最近更新</small><strong>{formatTime(selected.updated_at)}</strong></span><span><small>上下文交付</small><strong>{deliveryText(selected.delivery)}</strong></span></section>
-            <div className="project-session-boundary-note">工作目录相对于该 Node 的 AgentDock 默认 cwd；Prompt 应为零 Source，且不占用 Project Prompt 预算。</div>
             {detailLoading && <div className="project-session-empty">正在读取 Target 详情…</div>}
             {detailError && <div className="nx-alert is-error">{detailError}</div>}
             {!detailLoading && detail && <section className="project-target-list">{detail.targets.map((item) => <article className="project-target-card" key={item.target.target_id}>

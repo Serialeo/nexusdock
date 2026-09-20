@@ -42,8 +42,10 @@
 .recall-subnav button {
   min-width: 0;
   padding: 7px 10px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   border: 1px solid transparent;
   border-radius: 5px;
   background: transparent;
@@ -54,6 +56,12 @@
 .recall-subnav button:hover { background: var(--nx-soft-2); }
 .recall-subnav button.is-active { border-color: #c7c7c7; background: #ededed; }
 .recall-subnav strong { font-size: 11px; }
+.recall-subnav-badge {
+  font-style: normal;
+  font-size: 9px;
+  color: #d97706;
+  line-height: 1;
+}
 
 .recall-header button,
 .recall-new,

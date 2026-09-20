@@ -126,7 +126,7 @@ export default function ProjectSessionsPanel({ projectID, deployments, nodes }: 
   const selectedSession = useMemo(() => sessions.find((item) => item.work_session_id === selectedID), [selectedID, sessions]);
 
   return <section className="project-sessions-panel">
-    <header className="project-sessions-heading"><div><Waypoints size={18} /><span><strong>WorkSessions</strong><small>只观察外部 MCP Host 已建立的 Project 会话与 Target；Nexus 不创建第二套聊天。</small></span></div><button type="button" className="nx-button is-secondary is-small" disabled={loading} onClick={() => void loadSessions()}><RefreshCw size={14} />刷新</button></header>
+    <header className="project-sessions-heading"><div><Waypoints size={18} /><span><strong>WorkSessions</strong></span></div><button type="button" className="nx-button is-secondary is-small" disabled={loading} onClick={() => void loadSessions()}><RefreshCw size={14} />刷新</button></header>
     {error && <div className="nx-alert is-error" role="alert"><CircleAlert size={16} />{error}</div>}
     <section className="project-sessions-workspace">
       <aside className="project-session-list" aria-busy={loading}>
@@ -137,9 +137,8 @@ export default function ProjectSessionsPanel({ projectID, deployments, nodes }: 
       <article className="project-session-detail">
         {!selectedSession && <div className="project-session-empty">选择一个 WorkSession 查看 Target。</div>}
         {selectedSession && <>
-          <header><div><span className="nexus-eyebrow">PROJECT SESSION</span><h3>工作会话</h3></div><span className={`project-state ${projectSessionStatusTone(selectedSession.status)}`}>{selectedSession.status}</span></header>
+          <header><div><h3>工作会话</h3></div><span className={`project-state ${projectSessionStatusTone(selectedSession.status)}`}>{selectedSession.status}</span></header>
           <section className="project-session-meta"><span><small>创建时间</small><strong>{formatTime(selectedSession.created_at)}</strong></span><span><small>最近更新</small><strong>{formatTime(selectedSession.updated_at)}</strong></span><span><small>上下文交付</small><strong>{deliveryEvidenceText(selectedSession.delivery)}</strong></span></section>
-          <div className="project-session-boundary-note">returned 只表示 Nexus 已将完整 Project Context 返回给 MCP Host；host_consumed 只表示 Host 已确认接收。两者都不代表模型已经理解规则或任务已经开始执行。</div>
           {detailLoading && <div className="project-session-empty">正在读取 Target 详情…</div>}
           {detailError && <div className="nx-alert is-error" role="alert">{detailError}</div>}
           {!detailLoading && detail && <section className="project-target-list">{detail.targets.length === 0 ? <div className="project-session-empty">该 WorkSession 没有 Target。</div> : detail.targets.map((item) => {

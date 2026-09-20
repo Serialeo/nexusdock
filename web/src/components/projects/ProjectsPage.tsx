@@ -231,15 +231,16 @@ export default function ProjectsPage({ nodes, refreshToken }: { nodes: AgentDock
   }
 
   return <section className="projects-page">
-    <header className="projects-page-heading">
-      <div><span className="nexus-eyebrow">WORK / PROJECTS</span><h2>Projects</h2><p>Project 组织跨节点工作；源码保留在各 Deployment 的原生目录中。</p></div>
-      <div className="projects-page-actions"><button type="button" className="nx-button is-secondary" disabled={loading} onClick={() => void reload()}><RefreshCw size={15} />刷新</button><button type="button" className="nx-button" onClick={openCreate}><CirclePlus size={16} />新建 Project</button></div>
-    </header>
-
     <section className="project-summary-strip" aria-label="Project 摘要">
-      <span><small>启用 Project</small><strong>{totals.enabled}</strong></span>
-      <span><small>Deployment</small><strong>{totals.deployments}</strong></span>
-      <span><small>可用 Target</small><strong>{totals.available}</strong></span>
+      <div className="project-summary-metrics">
+        <span><small>启用 Project</small><strong>{totals.enabled}</strong></span>
+        <span><small>Deployment</small><strong>{totals.deployments}</strong></span>
+        <span><small>可用 Target</small><strong>{totals.available}</strong></span>
+      </div>
+      <div className="project-summary-actions">
+        <button type="button" className="nx-button is-secondary is-small" disabled={loading} onClick={() => void reload()}><RefreshCw size={14} />刷新</button>
+        <button type="button" className="nx-button is-small" onClick={openCreate}><CirclePlus size={14} />新建 Project</button>
+      </div>
     </section>
 
     {error && <div className="nx-alert is-error" role="alert"><CircleAlert size={16} />{error}</div>}
@@ -251,20 +252,38 @@ export default function ProjectsPage({ nodes, refreshToken }: { nodes: AgentDock
       {summaries.map((summary) => {
         const status = statusLabel(summary);
         return <article className={`project-card ${summary.project.enabled ? '' : 'is-disabled'}`} key={summary.project.id}>
-          <button type="button" className="project-card-main" onClick={() => { window.location.hash = `projects/${encodeURIComponent(summary.project.id)}`; }} aria-label={`打开 Project ${summary.project.name}`}>
-            <span className="project-card-icon"><FolderKanban size={18} /></span>
-            <span className="project-card-copy"><strong>{summary.project.name}</strong><small>{summary.project.orchestration_policy || '尚未填写协作说明'}</small><code>{summary.project.id}</code></span>
-          </button>
-          <div className="project-card-stats">
-            <span><small>Deployment</small><strong>{summary.deployments.length}</strong></span>
-            <span><small>可用 Target</small><strong>{summary.available}</strong></span>
-            <span><small>最近更新</small><strong>{formatTime(summary.project.updated_at, { compact: true })}</strong></span>
+          <div className="project-card-head">
+            <div className="project-card-title-group">
+              <button
+                type="button"
+                className="project-card-title-link"
+                onClick={() => { window.location.hash = `projects/${encodeURIComponent(summary.project.id)}`; }}
+                aria-label={`打开 Project ${summary.project.name}`}
+              >
+                <span className="project-card-icon"><FolderKanban size={17} /></span>
+                <span className="project-card-title">{summary.project.name}</span>
+              </button>
+              <span className={`project-state ${status.className}`}>{status.label}</span>
+            </div>
+            <div className="project-card-actions">
+              <button type="button" className="nx-button is-secondary is-small" disabled={!!busy} onClick={() => openEdit(summary.project)}><Pencil size={13} />编辑</button>
+              <button type="button" className="nx-button is-secondary is-small" disabled={!!busy} onClick={() => void toggleProject(summary.project)}><Power size={13} />{summary.project.enabled ? '停用' : '启用'}</button>
+              <button type="button" className="nx-button is-danger is-small" disabled={!!busy} onClick={() => { setDialogError(''); setDeleting(summary.project); }}><Trash2 size={13} />删除</button>
+            </div>
           </div>
-          <div className="project-card-actions">
-            <span className={`project-state ${status.className}`}>{status.label}</span>
-            <button type="button" className="nx-button is-secondary is-small" disabled={!!busy} onClick={() => openEdit(summary.project)}><Pencil size={14} />编辑</button>
-            <button type="button" className="nx-button is-secondary is-small" disabled={!!busy} onClick={() => void toggleProject(summary.project)}><Power size={14} />{summary.project.enabled ? '停用' : '启用'}</button>
-            <button type="button" className="nx-button is-danger is-small" disabled={!!busy} onClick={() => { setDialogError(''); setDeleting(summary.project); }}><Trash2 size={14} />删除</button>
+          {summary.project.orchestration_policy && (
+            <div className="project-card-body">
+              <p className="project-card-desc">{summary.project.orchestration_policy}</p>
+            </div>
+          )}
+          <div className="project-card-foot">
+            <div className="project-card-meta">
+              <span className="project-meta-item"><small>Deployment</small><strong>{summary.deployments.length}</strong></span>
+              <span className="project-meta-sep" aria-hidden="true">·</span>
+              <span className="project-meta-item"><small>可用 Target</small><strong>{summary.available}</strong></span>
+              <span className="project-meta-sep" aria-hidden="true">·</span>
+              <span className="project-meta-item"><small>最近更新</small><code>{formatTime(summary.project.updated_at, { compact: true })}</code></span>
+            </div>
           </div>
         </article>;
       })}

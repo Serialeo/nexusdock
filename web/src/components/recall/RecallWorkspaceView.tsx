@@ -4,7 +4,6 @@ import RecallEditor from './RecallEditor';
 import RecallExperienceCardsPage from './RecallExperienceCardsPage';
 import RecallEvolutionPage from './RecallEvolutionPage';
 import RecallFileBrowser from './RecallFileBrowser';
-import RecallHeader from './RecallHeader';
 import RecallNoticeArea from './RecallNoticeArea';
 import RecallStats from './RecallStats';
 import RecallVersionHistoryPage from './RecallVersionHistoryPage';
@@ -31,9 +30,8 @@ export default function RecallWorkspaceView(props: Props) {
   }
 
   return <main className={`recall-workspace ${props.detailOpen ? 'is-detail-open' : ''}`}>
-    <RecallHeader {...props} />
     <nav className="recall-subnav" aria-label="Recall 分类">
-      {recallNavigation.map((item) => <button type="button" key={item.id} className={props.page === item.id ? 'is-active' : ''} aria-current={props.page === item.id ? 'page' : undefined} onClick={() => props.onNavigate(item.id)}><strong>{item.label}</strong></button>)}
+      {recallNavigation.map((item) => <button type="button" key={item.id} className={props.page === item.id ? 'is-active' : ''} aria-current={props.page === item.id ? 'page' : undefined} onClick={() => props.onNavigate(item.id)}><strong>{item.label}</strong>{item.id === 'history' && props.dirty ? <em className="recall-subnav-badge" title={`${props.changedCount} 项未记录`}>●</em> : null}</button>)}
     </nav>
     <RecallNoticeArea {...props} />
     <RecallActionDialog {...props} />

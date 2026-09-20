@@ -186,14 +186,16 @@ export default function NodeFilesPage({ node, refreshToken }: { node: AgentDockN
 
   return <section className="node-files-page">
     <section className="node-files-toolbar">
-      <div className="node-files-runtime"><span><Server size={14} />{runtimeLabel(node)}</span></div>
+      <div className="node-files-runtime">
+        <span><Server size={14} />{runtimeLabel(node)}</span>
+        <label className="node-files-hidden"><input type="checkbox" checked={includeHidden} onChange={(event) => toggleHidden(event.target.checked)} disabled={loading} /><span>显示隐藏项</span></label>
+      </div>
       <form className="node-files-pathbar" onSubmit={submitPath}>
         <button type="button" className="nx-button is-secondary is-small" title="上一级目录" disabled={!parentPath || loading} onClick={() => void loadDirectory(parentPath)}><ChevronUp size={15} />上一级</button>
         <label><span className="sr-only">目录路径</span><input value={pathInput} onChange={(event) => setPathInput(event.target.value)} placeholder={placeholder} spellCheck={false} autoCapitalize="off" autoCorrect="off" /></label>
         <button type="submit" className="nx-button is-small" disabled={loading}>前往</button>
         <button type="button" className="nx-button is-secondary is-small" title="刷新当前目录" disabled={loading} onClick={() => void loadDirectory(currentPath)}><RefreshCw size={15} />刷新</button>
       </form>
-      <label className="node-files-hidden"><input type="checkbox" checked={includeHidden} onChange={(event) => toggleHidden(event.target.checked)} disabled={loading} /><span>显示隐藏项</span></label>
     </section>
 
     {(error || notice || partial) && <div className={`nx-alert ${error ? 'is-error' : partial ? 'is-info' : 'is-success'}`} role={error ? 'alert' : 'status'}>{error || (partial ? `部分目录项无法读取，已跳过 ${skippedCount} 项。` : notice)}</div>}

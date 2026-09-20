@@ -76,7 +76,7 @@ export default function AccountSecurity() {
 
   return (
     <section className="security-panel">
-      <header className="security-head"><div><span className="security-icon"><ShieldCheck size={19} /></span><div><h2>账号与会话</h2><p>管理当前管理员会话与登录客户端</p></div></div><button type="button" className="security-secondary" onClick={() => void load()} disabled={loading || Boolean(actionBusy)}><RefreshCw className={loading ? 'spin' : ''} size={15} />刷新</button></header>
+      <header className="security-head"><div><span className="security-icon"><ShieldCheck size={19} /></span><h2>账号与会话</h2></div><button type="button" className="security-secondary" onClick={() => void load()} disabled={loading || Boolean(actionBusy)}><RefreshCw className={loading ? 'spin' : ''} size={15} />刷新</button></header>
       {error && <div className="auth-error">{error}</div>}
       <div className="security-profile"><div><strong>{session?.display_name || session?.username || 'Administrator'}</strong><span>{session?.username || '—'}</span></div><div className="security-actions"><button type="button" onClick={() => window.location.assign('/change-password?return_to=%2Fui%2F%23settings%2Faccount')} disabled={Boolean(actionBusy)}><KeyRound size={15} />修改密码</button><button type="button" onClick={() => void logout()} disabled={Boolean(actionBusy)}><LogOut size={15} />{actionBusy === 'logout' ? '正在退出…' : '退出登录'}</button></div></div>
       <div className="session-toolbar"><div><strong>活动会话</strong><span>{sessions.length} 个</span></div><button type="button" onClick={() => void logoutOthers()} disabled={Boolean(actionBusy) || sessions.filter((item) => !item.current).length === 0}>{actionBusy === 'logout-others' ? '正在退出…' : '退出其他会话'}</button></div>

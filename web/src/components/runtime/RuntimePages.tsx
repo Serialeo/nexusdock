@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { CheckCircle2, Circle, Clock3, FileText, Layers, LoaderCircle, Search, ShieldAlert, Trash2 } from 'lucide-react';
+import { Check, CheckCircle2, Circle, Clock3, Copy, FileText, Layers, LoaderCircle, RefreshCw, Search, ShieldAlert, Trash2 } from 'lucide-react';
 import { ApiError, api } from '../../api/client';
-import { formatTime, timeZoneLabel } from '../../lib/time';
+import { formatTime } from '../../lib/time';
 import { buildTaskListQuery, collectTaskSelection, deleteTaskBatch, type TaskFilters, type TaskTimeField, type TaskTimeRange } from './taskListModel';
 import './task-center.css';
 import Dialog from '../Dialog';
@@ -305,30 +305,34 @@ export function TaskCenterPage({ nodeID, refreshToken }: { nodeID: string; refre
     <OpsShell error={filterError || currentList.error}>
       {notice && <div className={`nx-alert ${deleteFailures.length > 0 ? 'is-info' : 'is-success'}`} role="status">{notice}<button type="button" onClick={() => setNotice('')}>关闭</button></div>}
       {actionError && <div className="nx-alert is-error" role="alert">{actionError}</div>}
-      <div className="ops-toolbar is-console">
-        <div className="ops-segmented">{(['active', 'blocked', 'completed', 'all'] as TaskStatus[]).map((status) => <button type="button" key={status} className={filters.status === status ? 'is-active' : ''} aria-pressed={filters.status === status} disabled={operationBusy} onClick={() => changeFilters({ status })}><span>{taskStatusLabels[status]}</span><em>{currentList.data.counts[status]}</em></button>)}</div>
-        <label className="ops-search"><Search size={15} /><input aria-label="搜索任务" value={filters.query} disabled={operationBusy} onChange={(event) => changeFilters({ query: event.target.value })} placeholder="搜索任务或当前步骤" /></label>
-        <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy} onClick={() => setCheckpointPromptOpen(true)}>Checkpoint 提示词</button>
-        <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy || Boolean(filterError)} onClick={() => { setChecked(new Map()); void loadTasks(); detail.reload(); }}>刷新</button>
-        <span className="ops-auto-refresh">{!pollingPaused && <i aria-hidden="true" />}{pollingPaused ? '选择期间暂停刷新' : '自动刷新'}</span>
-      </div>
-      <section className="ops-task-filters" aria-label="任务时间筛选">
-        <label>时间依据<select value={filters.timeField} disabled={operationBusy} onChange={(event) => changeFilters({ timeField: event.target.value as TaskTimeField })}><option value="updated_at">更新时间</option><option value="created_at">创建时间</option></select></label>
-        <label>时间范围<select value={filters.timeRange} disabled={operationBusy} onChange={(event) => changeFilters({ timeRange: event.target.value as TaskTimeRange })}><option value="all">全部时间</option><option value="24h">最近 24 小时</option><option value="7d">最近 7 天</option><option value="30d">最近 30 天</option><option value="before30d">30 天以前</option><option value="custom">自定义日期</option></select></label>
-        {filters.timeRange === 'custom' && <>
-          <label>开始日期<input type="date" aria-label="开始日期" value={filters.fromDate} disabled={operationBusy} onChange={(event) => changeFilters({ fromDate: event.target.value })} /></label>
-          <label>结束日期<input type="date" aria-label="结束日期" value={filters.toDate} disabled={operationBusy} onChange={(event) => changeFilters({ toDate: event.target.value })} /></label>
-        </>}
-        <small>按 {timeZoneLabel()} 显示{filters.timeRange === 'custom' ? '，包含结束日期当天，可只填一端' : ''}</small>
-        <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy} onClick={() => changeFilters({ status: 'all', query: '', timeRange: 'all', fromDate: '', toDate: '' })}>清除筛选</button>
-      </section>
-      <div className="ops-task-selection" role="group" aria-label="批量选择任务">
-        <label><input ref={selectPageRef} type="checkbox" aria-label="全选当前页任务" checked={allPageChecked} disabled={operationBusy || listUnavailable || tasks.length === 0} onChange={togglePage} />全选本页</label>
-        <span>已选 <strong>{checked.size}</strong> 条 · 筛选结果 {total} 条</span>
-        {total > tasks.length && <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy || listUnavailable} onClick={() => { void selectAllMatching(); }}>全选筛选结果（{total}）</button>}
-        {checked.size > 0 && <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy} onClick={() => setChecked(new Map())}>取消选择</button>}
-        <button type="button" className="nx-button is-danger is-small ops-task-bulk-delete" disabled={operationBusy || listUnavailable || checked.size === 0} onClick={() => requestDelete([...checked.values()])}><Trash2 size={15} />删除所选（{checked.size}）</button>
-        {selectingAll && <span role="status"><LoaderCircle size={14} className="is-spinning" />正在选择 {selectionProgress.count} / {selectionProgress.total} 条…</span>}
+      <div className="ops-task-panel">
+        <div className="ops-task-primary-row">
+          <div className="ops-segmented">{(['active', 'blocked', 'completed', 'all'] as TaskStatus[]).map((status) => <button type="button" key={status} className={filters.status === status ? 'is-active' : ''} aria-pressed={filters.status === status} disabled={operationBusy} onClick={() => changeFilters({ status })}><span>{taskStatusLabels[status]}</span><em>{currentList.data.counts[status]}</em></button>)}</div>
+          <label className="ops-search"><Search size={14} /><input aria-label="搜索任务" value={filters.query} disabled={operationBusy} onChange={(event) => changeFilters({ query: event.target.value })} placeholder="搜索任务或当前步骤" /></label>
+          <div className="ops-task-head-actions">
+            <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy} onClick={() => setCheckpointPromptOpen(true)}>Checkpoint 提示词</button>
+            <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy || Boolean(filterError)} onClick={() => { setChecked(new Map()); void loadTasks(); detail.reload(); }}>刷新</button>
+          </div>
+        </div>
+        <div className="ops-task-secondary-row">
+          <div className="ops-task-filters-inline" aria-label="任务时间筛选">
+            <label><span>时间依据</span><select value={filters.timeField} disabled={operationBusy} onChange={(event) => changeFilters({ timeField: event.target.value as TaskTimeField })}><option value="updated_at">更新时间</option><option value="created_at">创建时间</option></select></label>
+            <label><span>时间范围</span><select value={filters.timeRange} disabled={operationBusy} onChange={(event) => changeFilters({ timeRange: event.target.value as TaskTimeRange })}><option value="all">全部时间</option><option value="24h">最近 24 小时</option><option value="7d">最近 7 天</option><option value="30d">最近 30 天</option><option value="before30d">30 天以前</option><option value="custom">自定义日期</option></select></label>
+            {filters.timeRange === 'custom' && <>
+              <label><span>开始</span><input type="date" aria-label="开始日期" value={filters.fromDate} disabled={operationBusy} onChange={(event) => changeFilters({ fromDate: event.target.value })} /></label>
+              <label><span>结束</span><input type="date" aria-label="结束日期" value={filters.toDate} disabled={operationBusy} onChange={(event) => changeFilters({ toDate: event.target.value })} /></label>
+            </>}
+            <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy} onClick={() => changeFilters({ status: 'all', query: '', timeRange: 'all', fromDate: '', toDate: '' })}>清除筛选</button>
+          </div>
+          <div className="ops-task-selection-inline" role="group" aria-label="批量选择任务">
+            <label><input ref={selectPageRef} type="checkbox" aria-label="全选当前页任务" checked={allPageChecked} disabled={operationBusy || listUnavailable || tasks.length === 0} onChange={togglePage} />全选本页</label>
+            <span>已选 <strong>{checked.size}</strong> 条 · 筛选结果 {total} 条</span>
+            {total > tasks.length && <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy || listUnavailable} onClick={() => { void selectAllMatching(); }}>全选筛选结果（{total}）</button>}
+            {checked.size > 0 && <button type="button" className="nx-button is-secondary is-small" disabled={operationBusy} onClick={() => setChecked(new Map())}>取消选择</button>}
+            <button type="button" className="nx-button is-danger is-small ops-task-bulk-delete" disabled={operationBusy || listUnavailable || checked.size === 0} onClick={() => requestDelete([...checked.values()])}><Trash2 size={13} />删除所选（{checked.size}）</button>
+            {selectingAll && <span role="status"><LoaderCircle size={13} className="is-spinning" />正在选择 {selectionProgress.count} / {selectionProgress.total} 条…</span>}
+          </div>
+        </div>
       </div>
       <section className={`ops-master-detail mobile-drilldown ${mobileDetailOpen ? 'is-detail-open' : 'is-list-open'}`}>
         <div className="ops-task-browser mobile-drilldown-list">
@@ -393,7 +397,6 @@ export function SkillsPage({ nodeID, refreshToken }: { nodeID: string; refreshTo
     <section className={`skills-workspace mobile-drilldown ${mobileDetailOpen ? 'is-detail-open' : 'is-list-open'}`}>
       <aside className="skills-catalog mobile-drilldown-list">
         <header className="skills-catalog-head">
-          <div><span className="nexus-eyebrow">SKILLS</span><strong>{filtered.length}</strong><small>共 {resource.data.count} 个</small></div>
           <label className="ops-search"><Search size={15} /><input aria-label="搜索 Skill" value={query} onChange={(event) => { setQuery(event.target.value); setMobileDetailOpen(false); }} placeholder="搜索名称或说明" /></label>
         </header>
         <div className="skills-rail">
@@ -445,6 +448,7 @@ function SkillDetail({ nodeID, skill, detail, loading, error, refreshToken, onCh
 
 function SkillDetailContent({ nodeID, skill, detail, loading, error, refreshToken, onChanged }: { nodeID: string; skill: OpsSkill; detail?: OpsSkillDetail; loading: boolean; error?: string; refreshToken: number; onChanged: () => void }) {
   const [selectedPath, setSelectedPath] = useState('');
+  const [copied, setCopied] = useState(false);
   const full = detail?.id ? detail : skill;
   const files = detail?.files || [];
   const preferredPath = files.find((file) => file.path.toLowerCase() === 'skill.md')?.path || files[0]?.path || '';
@@ -480,38 +484,61 @@ function SkillDetailContent({ nodeID, skill, detail, loading, error, refreshToke
     }
   }
 
+  function handleCopy() {
+    if (preview.data.file?.content) {
+      void navigator.clipboard.writeText(preview.data.file.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }
+
   return <article className="skill-detail-panel">
     <header className="skill-detail-head">
-      <div><span className="nexus-eyebrow">SKILL</span><h3>{full.title || full.id}</h3><p>{full.description || '暂无用途说明。'}</p></div>
+      <div><h3>{full.title || full.id}</h3><p>{full.description || '暂无用途说明。'}</p></div>
       <StatusBadge tone={toneForStatus(full.status)}>{full.active_version || full.status}</StatusBadge>
     </header>
     {loading && <div className="nx-alert is-info">正在读取 Skill 详情…</div>}
     {error && <div className="nx-alert is-error">{error}</div>}
 
     <dl className="skill-meta" aria-label="Skill 摘要">
-      <div><dt>版本</dt><dd>{full.active_version || '未标记'}</dd></div>
-      <div><dt>文件</dt><dd>{files.length}</dd></div>
-      <div><dt>更新</dt><dd>{formatTime(full.updated_at)}</dd></div>
+      <div className="skill-meta-version">
+        <dt>版本</dt>
+        <dd>
+          {manageBase && (full.versions || []).length > 0 ? (
+            <div className="skill-version-buttons">
+              {(full.versions || []).map((version) => (
+                <button
+                  key={version}
+                  type="button"
+                  className={`nx-button is-small ${version === full.active_version ? 'is-secondary' : ''}`}
+                  disabled={Boolean(managing) || version === full.active_version}
+                  onClick={() => void manageSkill('activate', { version })}
+                >
+                  {version === full.active_version ? `${version} · Active` : `激活 ${version}`}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="nx-button is-secondary is-small"
+                disabled={Boolean(managing) || (full.versions || []).length < 2}
+                onClick={() => void manageSkill('rollback')}
+              >
+                回滚上一版本
+              </button>
+            </div>
+          ) : (
+            <strong>{full.active_version || '未标记'}</strong>
+          )}
+        </dd>
+      </div>
+      <div><dt>文件</dt><dd><strong>{files.length}</strong></dd></div>
+      <div><dt>更新</dt><dd><strong>{formatTime(full.updated_at)}</strong></dd></div>
     </dl>
-
-    {manageBase && <section className="skill-management" aria-label="Skill 节点设置">
-      <header><div><strong>节点设置</strong><small>只修改该 AgentDock 上的已安装 Skill 状态；不会编辑不可变包正文。</small></div></header>
-      {(manageError || manageNotice) && <div className={`nx-alert ${manageError ? 'is-error' : 'is-success'}`}>{manageError || manageNotice}</div>}
-      <div className="skill-version-actions">
-        <div><span>已安装版本</span><strong>{full.active_version || '未激活'}</strong></div>
-        <div className="skill-version-buttons">{(full.versions || []).map((version) => <button key={version} type="button" className={`nx-button is-small ${version === full.active_version ? 'is-secondary' : ''}`} disabled={Boolean(managing) || version === full.active_version} onClick={() => void manageSkill('activate', { version })}>{version === full.active_version ? `${version} · Active` : `激活 ${version}`}</button>)}<button type="button" className="nx-button is-secondary is-small" disabled={Boolean(managing) || (full.versions || []).length < 2} onClick={() => void manageSkill('rollback')}>回滚上一版本</button></div>
-      </div>
-      <div className="skill-env-panel">
-        <header><div><span>隔离环境变量</span><small>仅显示变量名和是否为非空值，不读取秘密。</small></div><button type="button" className="nx-button is-secondary is-small" disabled={environment.loading || Boolean(managing)} onClick={() => environment.reload()}>刷新</button></header>
-        {environment.error && <div className="nx-alert is-error">{environment.error}</div>}
-        <div className="skill-env-list">{environment.data.items.length === 0 ? <span className="empty-mini">尚未配置 Skill 环境变量。</span> : environment.data.items.map((item) => <div key={item.key}><code>{item.key}</code><span>{item.configured ? '已配置非空值' : '已配置空值'}</span><button type="button" className="nx-button is-danger is-small" disabled={Boolean(managing)} onClick={() => void manageSkill('env_unset', { key: item.key })}>删除</button></div>)}</div>
-        <div className="skill-env-editor"><label><span>变量名</span><input value={envKey} onChange={(event) => setEnvKey(event.target.value)} placeholder="API_TOKEN" spellCheck={false} /></label><label><span>值</span><input type="password" value={envValue} onChange={(event) => setEnvValue(event.target.value)} placeholder="允许显式保存空字符串" autoComplete="new-password" /></label><button type="button" className="nx-button" disabled={Boolean(managing) || !envKey.trim()} onClick={() => void manageSkill('env_set', { key: envKey.trim(), value: envValue })}>{managing === 'env_set' ? '保存中…' : '保存变量'}</button></div>
-      </div>
-    </section>}
+    {(manageError || manageNotice) && <div className={`nx-alert ${manageError ? 'is-error' : 'is-success'}`}>{manageError || manageNotice}</div>}
 
     <section className="skill-file-workspace">
       <aside className="skill-file-nav">
-        <header><div><strong>文件</strong><small>{files.length} 个</small></div></header>
+        <header><strong>文件列表</strong><span>{files.length}</span></header>
         {files.length === 0 ? <EmptyOps text="当前安装包没有可展示的文件。" /> : <>
           <div className="skill-mobile-file-tabs" role="tablist" aria-label="选择文件">{files.map((file) => <button type="button" role="tab" aria-selected={activePath === file.path} key={file.path} className={activePath === file.path ? 'is-active' : ''} onClick={() => setSelectedPath(file.path)}><FileText size={13} /><span>{file.path}</span></button>)}</div>
           <div className="skill-file-list">{files.map((file) => <button type="button" key={file.path} className={`skill-file-row ${activePath === file.path ? 'is-active' : ''}`} onClick={() => setSelectedPath(file.path)}><FileText size={15} /><span><strong>{file.path}</strong><small>{fileKindLabel(file.kind)} · {formatBytes(file.size_bytes)}</small></span></button>)}</div>
@@ -519,15 +546,73 @@ function SkillDetailContent({ nodeID, skill, detail, loading, error, refreshToke
       </aside>
       <div className="skill-file-preview">
         {!activePath ? <EmptyOps text="选择文件后在这里查看内容。" /> : preview.loading ? <EmptyOps text="正在读取文件…" /> : preview.error ? <div className="nx-alert is-error">{preview.error}</div> : preview.data.file ? <>
-          <header><div><strong>{preview.data.file.path}</strong><span>{fileKindLabel(preview.data.file.kind)} · {formatBytes(preview.data.file.size_bytes)}</span></div>{preview.data.file.truncated && <em>仅显示前 256 KiB</em>}</header>
+          <header>
+            <div className="skill-file-preview-meta">
+              <code>{preview.data.file.path}</code>
+              <span>{fileKindLabel(preview.data.file.kind)} · {formatBytes(preview.data.file.size_bytes)}</span>
+              {preview.data.file.truncated && <em>仅显示前 256 KiB</em>}
+            </div>
+            <button type="button" className="nx-button is-secondary is-small" onClick={handleCopy} disabled={!preview.data.file.content}>
+              {copied ? <><Check size={13} />已复制</> : <><Copy size={13} />复制内容</>}
+            </button>
+          </header>
           <pre>{preview.data.file.content}</pre>
         </> : <EmptyOps text="文件内容不可用。" />}
       </div>
     </section>
 
+    {manageBase && <section className="skill-management" aria-label="Skill 环境变量">
+      <header>
+        <div className="skill-management-heading">
+          <strong>环境变量</strong>
+          <small>运行时隔离变量配置</small>
+        </div>
+        <button type="button" className="nx-button is-secondary is-small" disabled={environment.loading || Boolean(managing)} onClick={() => environment.reload()}><RefreshCw size={13} />刷新</button>
+      </header>
+      <div className="skill-management-body">
+        {environment.error && <div className="nx-alert is-error">{environment.error}</div>}
+        <div className="skill-env-list">
+          {environment.data.items.length === 0 ? (
+            <div className="skill-env-empty">暂未配置环境变量</div>
+          ) : (
+            environment.data.items.map((item) => (
+              <div key={item.key}>
+                <code>{item.key}</code>
+                <span>{item.configured ? '已配置非空值' : '已配置空值'}</span>
+                <button type="button" className="nx-button is-danger is-small" disabled={Boolean(managing)} onClick={() => void manageSkill('env_unset', { key: item.key })}>删除</button>
+              </div>
+            ))
+          )}
+        </div>
+        <div className="skill-env-editor">
+          <input
+            value={envKey}
+            onChange={(event) => setEnvKey(event.target.value)}
+            placeholder="变量名 (如 API_TOKEN)"
+            spellCheck={false}
+          />
+          <input
+            type="password"
+            value={envValue}
+            onChange={(event) => setEnvValue(event.target.value)}
+            placeholder="变量值 (可留空)"
+            autoComplete="new-password"
+          />
+          <button
+            type="button"
+            className="nx-button is-small"
+            disabled={Boolean(managing) || !envKey.trim()}
+            onClick={() => void manageSkill('env_set', { key: envKey.trim(), value: envValue })}
+          >
+            {managing === 'env_set' ? '保存中…' : '保存'}
+          </button>
+        </div>
+      </div>
+    </section>}
+
     <details className="ops-secondary-details skill-technical-details">
       <summary>版本与技术信息</summary>
-      <div className="ops-detail-grid">
+      <div className="ops-detail-grid skill-technical-grid">
         <Info label="ID" value={full.id} />
         <Info label="来源" value={full.source || 'agentdock-api'} />
         <Info label="版本历史" value={(full.versions || []).join(' → ') || '暂无'} />

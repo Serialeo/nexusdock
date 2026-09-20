@@ -111,17 +111,18 @@ export default function MCPAccessPanel({ refreshToken }: { refreshToken: number 
   }
 
   return <section className="mcp-access-panel">
-    <header className="settings-section-heading mcp-access-heading">
-      <div><span className="nexus-eyebrow">MCP ACCESS</span><h2>MCP 接入</h2><p>为不使用 OAuth 的 MCP 客户端提供固定 Bearer Token。</p></div>
-      <button type="button" className="nx-button is-secondary" onClick={() => void load()} disabled={loading || resetting}><RefreshCw size={15} />刷新</button>
-    </header>
-
     {notice && <div className={`nx-alert is-${notice.tone}`}>{notice.text}</div>}
 
     <section className="mcp-access-card">
       <header>
-        <span className="nexus-panel-icon"><Cable size={17} /></span>
-        <div><h3>连接信息</h3><p>客户端连接 NexusDock 的统一 MCP 入口。</p></div>
+        <div className="mcp-access-card-heading">
+          <span className="nexus-panel-icon"><Cable size={17} /></span>
+          <h3>连接信息</h3>
+        </div>
+        <button type="button" className="nx-button is-secondary is-small" onClick={() => void load()} disabled={loading || resetting}>
+          <RefreshCw size={13} className={loading ? 'spin' : ''} />
+          刷新
+        </button>
       </header>
       <div className="mcp-access-body">
         <label className="mcp-access-field">
@@ -146,7 +147,7 @@ export default function MCPAccessPanel({ refreshToken }: { refreshToken: number 
     <section className="mcp-access-card">
       <header>
         <span className="nexus-panel-icon"><AppWindow size={17} /></span>
-        <div><h3>MCP Apps UI</h3><p>控制 NexusDock 对 MCP 客户端发布交互式 Apps UI。</p></div>
+        <h3>MCP Apps UI</h3>
       </header>
       <div className="mcp-access-body">
         <label className="mcp-apps-toggle">

@@ -273,12 +273,12 @@ function RuntimeTemplateViewer({ selected, parsed, onCopy, onOpenHistory, histor
     <div className="workflow-runtime-meta"><span>版本 {selected.version}</span><span>{phases.length || 1} 个阶段</span><span>更新于 {formatTime(selected.updated_at)}</span>{onOpenHistory && (selected.retired_count ?? 0) > 0 && <button type="button" className="workflow-history-link" onClick={onOpenHistory} disabled={historyLoading}><History size={13} />{historyLoading ? '读取中…' : `历史版本 ${selected.retired_count}`}<ChevronRight size={13} /></button>}</div>
 
     <section className="workflow-runtime-section">
-      <SectionTitle title="执行步骤" subtitle="按阶段查看任务主流程。" />
+      <SectionTitle title="执行步骤" />
       {steps.length === 0 ? <EmptyMini>没有步骤。</EmptyMini> : <div className="workflow-phase-list">{stepGroups.map((group) => <div className="workflow-phase-block" key={group.phase}><header><span>{group.phase}</span><strong>{group.steps.length} 步</strong></header><div className="workflow-step-list">{group.steps.map((step, index) => <StepCard key={`${group.phase}:${step.id}:${index}`} step={step} index={steps.indexOf(step) + 1} />)}</div></div>)}</div>}
     </section>
 
     <section className="workflow-runtime-section">
-      <SectionTitle title="完成条件" subtitle="任务结束前必须满足的结果。" />
+      <SectionTitle title="完成条件" />
       {conditions.length === 0 ? <EmptyMini>没有完成条件。</EmptyMini> : <div className="workflow-condition-list">{conditions.map((condition, index) => <div key={`${condition}:${index}`}><span>{index + 1}</span><p>{condition}</p></div>)}</div>}
     </section>
 
@@ -286,7 +286,7 @@ function RuntimeTemplateViewer({ selected, parsed, onCopy, onOpenHistory, histor
       <summary>匹配与技术信息</summary>
       <div className="workflow-secondary-body">
         <section>
-          <SectionTitle title="匹配规则" subtitle="模型用这些信号判断是否使用该模板。" />
+          <SectionTitle title="匹配规则" />
           {keywords.length > 0 && <ChipRow values={keywords} />}
           {matchRows.length === 0 ? <EmptyMini>没有匹配规则。</EmptyMini> : <div className="workflow-match-grid">{matchRows.map((row) => <div key={row.label}><span>{row.label}</span><p>{row.values.join(' · ')}</p></div>)}</div>}
         </section>
@@ -316,8 +316,8 @@ function InfoTile({ label, value }: { label: string; value: string }) {
   return <div className="workflow-info-tile"><span>{label}</span><strong>{value || '暂无'}</strong></div>;
 }
 
-function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) {
-  return <header className="workflow-section-title"><div><h4>{title}</h4><p>{subtitle}</p></div></header>;
+function SectionTitle({ title }: { title: string }) {
+  return <header className="workflow-section-title"><h4>{title}</h4></header>;
 }
 
 function ChipRow({ values }: { values: string[] }) {

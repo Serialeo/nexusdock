@@ -43,7 +43,18 @@ html,
 body,
 #root { min-height: 100%; }
 
-html { background: var(--nx-bg); }
+html {
+  background: var(--nx-bg);
+  touch-action: manipulation;
+}
+
+@media (max-width: 820px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
 
 body {
   margin: 0;

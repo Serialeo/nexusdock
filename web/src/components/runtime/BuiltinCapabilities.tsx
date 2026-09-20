@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { BuiltinRequests } from './builtinRequests';
 import { api } from '../../api/client';
 
@@ -7,7 +8,13 @@ export type BuiltinCapability = {
   available: boolean; transitioning: boolean; reason: string; tools: string[];
 };
 type Snapshot = { ok: boolean; node_id: string; builtins: BuiltinCapability[] };
+type Tone = 'ok' | 'warn' | 'danger' | 'muted';
+
 const labels: Record<string, string> = { browser: '浏览器 CDP', acp: 'Coding Agent（ACP）' };
+
+function StatusBadge({ tone, children }: { tone: Tone; children: ReactNode }) {
+  return <span className={`status-badge tone-${tone}`}><span />{children}</span>;
+}
 
 export default function BuiltinCapabilities({ nodeID, online }: { nodeID: string; online: boolean }) {
   const [states, setStates] = useState<BuiltinCapability[]>([]);
@@ -15,6 +22,7 @@ export default function BuiltinCapabilities({ nodeID, online }: { nodeID: string
   const [busy, setBusy] = useState(false);
   const requests = useRef<BuiltinRequests<Snapshot, { id: string; enabled: boolean }> | null>(null);
   const endpoint = `/v1/runtime/nodes/${encodeURIComponent(nodeID)}/builtins`;
+
   useEffect(() => {
     setError(''); setStates([]); setBusy(false);
     if (!online) return;
@@ -36,19 +44,75 @@ export default function BuiltinCapabilities({ nodeID, online }: { nodeID: string
     void requests.current?.update({ id: state.id, enabled });
   }
 
-  return <section className="agentdock-node-form" aria-label="内置能力">
-    <p>选择保存在此 AgentDock 节点，重启后保留。开启能力后仍按 Deployment 权限执行；外部 MCP 服务在 MCP 页面管理。</p>
-    {!online && <p className="empty-mini">节点离线，无法读取或修改实时状态。重连后会读取节点保存的选择。</p>}
-    {error && <p role="alert" className="nx-alert is-error">{error}</p>}
-    {states.map((state) => <div key={state.id}>
-      <label className="agentdock-node-check">
-        <input type="checkbox" checked={state.enabled} disabled={!online || busy || !state.provided || state.transitioning} onChange={(event) => void toggle(state, event.target.checked)} />
-        <span>{labels[state.id] || state.id}</span>
-      </label>
-      <p className="empty-mini">{state.available ? `可用 · ${state.tools.length} 个工具 ${state.reason}` : state.reason || '后端未就绪'}</p>
-      {state.enabled && state.provided && !state.ready && !state.transitioning && <button type="button" className="nx-button is-secondary is-small" disabled={busy || !online} onClick={() => void toggle(state, true)}>重新检查后端</button>}
-    </div>)}
-    <button type="button" className="nx-button is-secondary" disabled={busy || !online} onClick={() => void requests.current?.refresh()}>刷新状态</button>
-    <p className="empty-mini">关闭会取消并清理当前会话，已发生的操作不会撤销；重新开启不会自动恢复旧任务。</p>
-  </section>;
+  return (
+    <div className="builtin-caps-panel" aria-label="内置能力">
+      {!online && <div className="nx-alert is-warning">节点当前离线，无法读取或修改实时状态。</div>}
+      {error && <div role="alert" className="nx-alert is-error">{error}</div>}
+
+      <div className="builtin-caps-list">
+        {states.map((state) => {
+          const tone: Tone = !state.provided
+            ? 'muted'
+            : state.transitioning
+              ? 'warn'
+              : state.enabled
+                ? (state.available ? 'ok' : 'danger')
+                : 'muted';
+
+          const statusText = !state.provided
+            ? '不支持'
+            : state.transitioning
+              ? '切换中…'
+              : state.enabled
+                ? (state.available ? (state.tools.length > 0 ? `就绪 · ${state.tools.length} 个工具` : '已就绪') : (state.reason || '未就绪'))
+                : '已关闭';
+
+          return (
+            <div key={state.id} className={`builtin-cap-row ${!state.provided ? 'is-disabled' : ''}`}>
+              <div className="builtin-cap-main">
+                <div className="builtin-cap-title">
+                  <strong>{labels[state.id] || state.id}</strong>
+                  <StatusBadge tone={tone}>{statusText}</StatusBadge>
+                </div>
+                {state.enabled && state.provided && !state.ready && !state.transitioning && (
+                  <button
+                    type="button"
+                    className="nx-button is-secondary is-small"
+                    disabled={busy || !online}
+                    onClick={() => void toggle(state, true)}
+                  >
+                    重试后端
+                  </button>
+                )}
+              </div>
+              <label className="ai-switch-row" title={!state.provided ? '当前发行包不提供此能力' : undefined}>
+                <input
+                  type="checkbox"
+                  checked={state.enabled}
+                  disabled={!online || busy || !state.provided || state.transitioning}
+                  onChange={(event) => void toggle(state, event.target.checked)}
+                />
+                <span><strong>{state.enabled ? '已开启' : '已关闭'}</strong></span>
+              </label>
+            </div>
+          );
+        })}
+        {states.length === 0 && online && !error && (
+          <div className="builtin-caps-empty">正在读取能力…</div>
+        )}
+      </div>
+
+      <footer className="builtin-caps-footer">
+        <button
+          type="button"
+          className="nx-button is-secondary is-small"
+          disabled={busy || !online}
+          onClick={() => void requests.current?.refresh()}
+        >
+          <RefreshCw size={13} className={busy ? 'spin' : ''} />
+          刷新状态
+        </button>
+      </footer>
+    </div>
+  );
 }

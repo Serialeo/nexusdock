@@ -2,7 +2,7 @@ import { formatTime } from './lib/time';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Activity, BrainCircuit, Cable, ChevronRight,
-  CircleAlert, Database, FileJson, Folder, FolderKanban, Home, ListChecks, Menu, RefreshCw,
+  CircleAlert, Database, FileJson, Folder, FolderKanban, Home, ListChecks, Menu, Pin, RefreshCw,
   ServerCog, Settings, ShieldCheck, UserRound, Waypoints, Wrench, X,
 } from 'lucide-react';
 import RecallWorkspace from './RecallWorkspace';
@@ -89,11 +89,11 @@ const NAV_GROUPS: NavGroup[] = [
   { label: '系统', items: NAV.filter((item) => item.scope === 'system') },
 ];
 
-const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string; description: string; icon: typeof Settings }> = [
-  { id: 'account', label: '账号与会话', description: '登录、安全与活动会话', icon: UserRound },
-  { id: 'mcp', label: 'MCP 接入', description: '客户端地址与访问 Token', icon: Cable },
-  { id: 'ai', label: 'AI 与向量', description: '模型、Embedding 与索引', icon: BrainCircuit },
-  { id: 'system', label: '系统与节点', description: 'AgentDock、节点与系统状态', icon: ServerCog },
+const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string; icon: typeof Settings }> = [
+  { id: 'account', label: '账号与会话', icon: UserRound },
+  { id: 'mcp', label: 'MCP 接入', icon: Cable },
+  { id: 'ai', label: 'AI 与向量', icon: BrainCircuit },
+  { id: 'system', label: '系统与节点', icon: ServerCog },
 ];
 
 function sectionFromHash(): Section {
@@ -148,20 +148,81 @@ export default function App() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [session, setSession] = useState<WebSession | null>(null);
-  const runtimeNodes = useAgentDockNodes(refreshToken);
+  const [sessionChecking, setSessionChecking] = useState(true);
+  const [sessionError, setSessionError] = useState('');
+  const runtimeNodes = useAgentDockNodes(refreshToken, Boolean(session) && !sessionChecking);
+  const [sidebarPinned, setSidebarPinned] = useState(() => {
+    try {
+      return localStorage.getItem('nexus:sidebar-pinned') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  function toggleSidebarPin() {
+    setSidebarPinned((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('nexus:sidebar-pinned', String(next));
+      } catch {}
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && menuOpen) {
+        setMenuOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (menuOpen && !sidebarPinned) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [menuOpen, sidebarPinned]);
+
+  useEffect(() => {
+    const mql = window.matchMedia('(min-width: 1025px)');
+    const onChange = () => {
+      if (mql.matches) {
+        setMenuOpen(false);
+      }
+    };
+    mql.addEventListener?.('change', onChange);
+    return () => mql.removeEventListener?.('change', onChange);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    api<{ ok: boolean; session: WebSession }>('/v1/auth/session').then((result) => {
+    api<{ ok: boolean; session: WebSession }>('/v1/auth/session', { suppressSessionExpiry: true }).then((result) => {
       if (cancelled) return;
       setSession(result.session);
       if (result.session.csrf_token) setCSRFToken(result.session.csrf_token);
       if (result.session.must_change_password) {
         const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
         window.location.replace(`/change-password?return_to=${encodeURIComponent(returnTo)}`);
+        return;
       }
+      setSessionError('');
+      setSessionChecking(false);
     }).catch((error) => {
-      if (!cancelled && error instanceof ApiError && error.status === 401) setSessionExpired(true);
+      if (cancelled) return;
+      if (error instanceof ApiError && error.status === 401) {
+        const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        window.location.replace(`/login?return_to=${encodeURIComponent(returnTo)}`);
+        return;
+      }
+      setSessionError(messageOf(error));
+      setSessionChecking(false);
     });
     const expired = () => setSessionExpired(true);
     window.addEventListener('nexus:session-expired', expired);
@@ -174,6 +235,7 @@ export default function App() {
   useEffect(() => {
     const onHash = () => {
       setSection(sectionFromHash());
+      setMenuOpen(false);
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
@@ -185,14 +247,30 @@ export default function App() {
     setMenuOpen(false);
   }
 
+  // Vite 会直接提供 /ui/，不会经过后端的登录重定向；认证完成前不要挂载任何受保护的数据页面。
+  if (sessionChecking) {
+    return <main className="auth-shell"><section className="auth-panel"><div className="auth-security-note" role="status"><Activity size={15} /><span>正在验证登录状态…</span></div></section></main>;
+  }
+  if (!session) {
+    return <main className="auth-shell"><section className="auth-panel"><div className="auth-error" role="alert">{sessionError || '无法验证登录状态。'}</div><button className="auth-primary" type="button" onClick={() => window.location.reload()}>重新加载</button></section></main>;
+  }
+
   const active = NAV.find((item) => item.id === section) ?? NAV[0];
   const sessionName = session?.display_name || session?.username || 'Admin';
   return (
-    <div className="nexus-app">
+    <div className={`nexus-app ${sidebarPinned ? 'is-sidebar-pinned' : ''}`}>
       <aside id="nexus-primary-navigation" className={`nexus-sidebar ${menuOpen ? 'is-open' : ''}`}>
         <div className="nexus-brand">
           <span className="nexus-brand-mark" aria-hidden="true">N</span>
           <span><strong>Nexus</strong><small>AgentDock Console</small></span>
+          <button
+            type="button"
+            className="nexus-drawer-close"
+            aria-label="关闭导航"
+            onClick={() => setMenuOpen(false)}
+          >
+            <X size={18} />
+          </button>
         </div>
         <nav aria-label="主导航">
           {NAV_GROUPS.map((group) => <div className="nexus-nav-group" key={group.label}>
@@ -203,13 +281,48 @@ export default function App() {
             })}
           </div>)}
         </nav>
-        <div className="nexus-sidebar-foot"><ShieldCheck size={16} /><span><strong>Private workspace</strong><small>Local-first console</small></span></div>
+        <div className="nexus-sidebar-foot">
+          <div className="nexus-sidebar-foot-info">
+            <ShieldCheck size={16} />
+            <span><strong>Private workspace</strong><small>Local-first console</small></span>
+          </div>
+          <button
+            type="button"
+            className={`nexus-sidebar-pin-btn ${sidebarPinned ? 'is-pinned' : ''}`}
+            title={sidebarPinned ? '取消固定侧栏（默认收入抽屉）' : '固定侧栏到左侧'}
+            aria-label={sidebarPinned ? '取消固定侧栏' : '固定侧栏'}
+            onClick={toggleSidebarPin}
+          >
+            <Pin size={14} />
+          </button>
+        </div>
       </aside>
-      {menuOpen && <button type="button" className="nexus-scrim" aria-label="关闭菜单" onClick={() => setMenuOpen(false)} />}
+      {menuOpen && !sidebarPinned && <button type="button" className="nexus-scrim" aria-label="关闭菜单" onClick={() => setMenuOpen(false)} />}
       <main className="nexus-main">
         <header className="nexus-topbar">
-          <button type="button" className="nexus-mobile-menu" aria-label="切换菜单" aria-expanded={menuOpen} aria-controls="nexus-primary-navigation" onClick={() => setMenuOpen((value) => !value)}>{menuOpen ? <X /> : <Menu />}</button>
-          <div><span className="nexus-eyebrow">Nexus / {active.scope}</span><h1>{active.label}</h1></div>
+          <button
+            type="button"
+            className="nexus-menu-toggle"
+            aria-label="切换菜单"
+            aria-expanded={menuOpen}
+            aria-controls="nexus-primary-navigation"
+            onClick={() => setMenuOpen((value) => !value)}
+          >
+            {menuOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
+          <div className="nexus-topbar-heading"><span className="nexus-eyebrow">Nexus / {active.scope}</span><h1>{active.label}</h1></div>
+          {isRuntimeSection(section) && (
+            <div className="nexus-topbar-node-selector">
+              <span className="nexus-topbar-divider" aria-hidden="true" />
+              <AgentDockNodeSelector nodes={runtimeNodes.nodes} selectedNodeID={runtimeNodes.selectedNodeID} onSelect={runtimeNodes.selectNode} />
+              {runtimeNodes.selectedNode && (
+                <span className={`runtime-node-status ${runtimeNodes.selectedNode.online ? 'is-online' : 'is-offline'}`}>
+                  {runtimeNodes.selectedNode.online ? '在线' : '离线'}
+                  {runtimeNodes.selectedNode.os ? ` · ${runtimeNodes.selectedNode.os}/${runtimeNodes.selectedNode.arch}` : ''}
+                </span>
+              )}
+            </div>
+          )}
           <div className="nexus-top-actions">
             <span className="nexus-environment"><i />运行中</span>
             <button type="button" className="icon-button" title="刷新" aria-label="刷新当前页面" onClick={() => setRefreshToken((value) => value + 1)}><RefreshCw size={17} /></button>
@@ -311,17 +424,27 @@ function HomePage({ refreshToken, runtimeNodes, navigate }: { refreshToken: numb
   const nodeSummary = runtimeNodes.loading ? '读取中' : enabledNodes.length > 0 ? `${onlineNodes.length}/${enabledNodes.length} 在线` : '暂无节点';
   const databaseAbnormal = system.live && !system.data.ok;
   const needsAttention = databaseAbnormal || offlineNodes.length > 0 || errors.length > 0;
+  const dbOk = system.data.database === 'ok';
 
   return <>
-    <section className="nexus-overview-strip">
-      <div><span className="nexus-kicker">个人控制台</span><h2>{needsAttention ? '有项目需要处理' : '核心服务正常'}</h2><p>数据库 {system.data.database || 'unknown'} · 节点 {nodeSummary}</p></div>
-      <div className="nexus-overview-status"><StatusBadge tone={systemTone}>Nexus</StatusBadge><StatusBadge tone={nodesTone}>节点 {nodeSummary}</StatusBadge></div>
+    <section className="nexus-overview-strip" aria-label="个人控制台">
+      <div className="nexus-overview-lead">
+        <span className="nexus-panel-icon"><Activity size={16} /></span>
+        <div className="nexus-overview-title-group">
+          <h2>{needsAttention ? '有服务需要处理' : '核心服务正常'}</h2>
+        </div>
+      </div>
+      <div className="nexus-overview-status">
+        <StatusBadge tone={systemTone}>服务 {system.data.ok ? '正常' : '异常'}</StatusBadge>
+        <StatusBadge tone={dbOk ? 'ok' : 'danger'}>数据库 {system.data.database || 'unknown'}</StatusBadge>
+        <StatusBadge tone={nodesTone}>节点 {nodeSummary}</StatusBadge>
+      </div>
     </section>
     {errors.length > 0 && <InlineAlert tone="danger" title="部分数据读取失败" message={errors.join('；')} />}
 
     <NodeOverview runtimeNodes={runtimeNodes} runtimeMetrics={runtimeMetrics} />
 
-    {needsAttention && <Panel className="dashboard-attention-panel" icon={CircleAlert} title="需要处理" subtitle="只显示会影响使用的问题">
+    {needsAttention && <Panel className="dashboard-attention-panel" icon={CircleAlert} title="需要处理">
       {databaseAbnormal && <button type="button" className="attention-row" onClick={() => navigate('settings')}><StatusBadge tone="danger">异常</StatusBadge><span><strong>数据库异常</strong><small>{system.data.database || 'unknown'}</small></span><ChevronRight size={16} /></button>}
       {offlineNodes.map((node) => <button type="button" className="attention-row" key={node.id} onClick={() => { window.location.hash = 'settings/system'; }}><StatusBadge tone="danger">离线</StatusBadge><span><strong>{node.name}</strong><small>{formatTime(node.last_seen_at, { compact: true })}</small></span><ChevronRight size={16} /></button>)}
       {errors.map((message) => <div className="nx-alert is-error" key={message}>{message}</div>)}
@@ -383,10 +506,6 @@ function RuntimeContent({ active, refreshToken, runtimeNodes }: {
   runtimeNodes: RuntimeNodesState;
 }) {
   return <section className={`runtime-standalone-page runtime-${active}-page`}>
-    <div className="runtime-node-bar">
-      <AgentDockNodeSelector nodes={runtimeNodes.nodes} selectedNodeID={runtimeNodes.selectedNodeID} onSelect={runtimeNodes.selectNode} />
-      {runtimeNodes.selectedNode && <span className={`runtime-node-status ${runtimeNodes.selectedNode.online ? 'is-online' : 'is-offline'}`}>{runtimeNodes.selectedNode.online ? '在线' : '离线'}{runtimeNodes.selectedNode.os ? ` · ${runtimeNodes.selectedNode.os}/${runtimeNodes.selectedNode.arch}` : ''}</span>}
-    </div>
     {!runtimeNodes.selectedNode && <AgentDockNodeRequired><button type="button" className="nx-button" onClick={() => { window.location.hash = 'settings/system'; }}>管理节点</button></AgentDockNodeRequired>}
     {active === 'tasks' && runtimeNodes.selectedNode && <TaskCenterPage key={runtimeNodes.selectedNode.id} nodeID={runtimeNodes.selectedNode.id} refreshToken={refreshToken} />}
     {active === 'files' && runtimeNodes.selectedNode && <NodeFilesPage key={runtimeNodes.selectedNode.id} node={runtimeNodes.selectedNode} refreshToken={refreshToken} />}
@@ -397,6 +516,7 @@ function RuntimeContent({ active, refreshToken, runtimeNodes }: {
 
 function SettingsPage({ refreshToken, runtimeNodes }: { refreshToken: number; runtimeNodes: RuntimeNodesState }) {
   const [active, setActive] = useState<SettingsSection>(settingsSectionFromHash);
+  const subnavRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const onHash = () => setActive(settingsSectionFromHash());
@@ -404,18 +524,30 @@ function SettingsPage({ refreshToken, runtimeNodes }: { refreshToken: number; ru
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  useEffect(() => {
+    const activeBtn = subnavRef.current?.querySelector<HTMLButtonElement>('button.is-active');
+    if (activeBtn && subnavRef.current) {
+      const nav = subnavRef.current;
+      const navRect = nav.getBoundingClientRect();
+      const btnRect = activeBtn.getBoundingClientRect();
+      if (btnRect.left < navRect.left || btnRect.right > navRect.right) {
+        activeBtn.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' });
+      }
+    }
+  }, [active]);
+
   function navigate(next: SettingsSection) {
     window.location.hash = `settings/${next}`;
     setActive(next);
   }
 
   return <section className="settings-page">
-    <nav className="settings-subnav" aria-label="设置分类">
+    <nav ref={subnavRef} className="settings-subnav" aria-label="设置分类">
       {SETTINGS_SECTIONS.map((item) => {
         const Icon = item.icon;
         return <button key={item.id} type="button" className={active === item.id ? 'is-active' : ''} aria-current={active === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}>
           <span className="settings-subnav-icon"><Icon size={17} /></span>
-          <span><strong>{item.label}</strong><small>{item.description}</small></span>
+          <strong>{item.label}</strong>
         </button>;
       })}
     </nav>
@@ -428,11 +560,8 @@ function SettingsPage({ refreshToken, runtimeNodes }: { refreshToken: number; ru
   </section>;
 }
 
-function SystemSettingsPage({ refreshToken, runtimeNodes }: { refreshToken: number; runtimeNodes: RuntimeNodesState }) {
-  const system = useResource<SystemStatus>('/v1/system/status', { ok: false, service: 'nexusdock', database: 'unknown', schema_version: 0, nexus_data_dir: '', recall_repo_dir: '' }, refreshToken);
-
+function SystemSettingsPage({ runtimeNodes }: { refreshToken: number; runtimeNodes: RuntimeNodesState }) {
   return <section className="system-settings-page">
-    <header className="settings-section-heading"><div><span className="nexus-eyebrow">SYSTEM</span><h2>系统与节点</h2><p>管理 AgentDock 节点，并查看 NexusDock 运行状态。</p></div></header>
     <AgentDockNodesPanel
       nodes={runtimeNodes.nodes}
       selectedNodeID={runtimeNodes.selectedNodeID}
@@ -441,17 +570,10 @@ function SystemSettingsPage({ refreshToken, runtimeNodes }: { refreshToken: numb
       onReload={runtimeNodes.reload}
       onSelect={runtimeNodes.selectNode}
     />
-    <section className="settings-grid settings-system-grid">
-      <Panel icon={Activity} title="系统" subtitle="运行状态与数据位置">
-        <SettingValue label="服务" value={system.data.service || 'nexusdock'} tone={system.data.ok ? 'ok' : 'danger'} />
-        <SettingValue label="数据库" value={system.data.database || 'unknown'} tone={system.data.database === 'ok' ? 'ok' : 'danger'} />
-        <details className="nexus-technical-details"><summary>数据与版本</summary><SettingValue label="Schema" value={String(system.data.schema_version || 0)} /><SettingValue label="Nexus 数据" value={system.data.nexus_data_dir || '暂无'} mono /><SettingValue label="Recall 仓库" value={system.data.recall_repo_dir || '暂无'} mono /></details>
-      </Panel>
-    </section>
   </section>;
 }
 
-function Panel({ title, subtitle, icon: Icon, className = '', children }: { title: string; subtitle: string; icon?: typeof Home; className?: string; children: ReactNode }) { return <article className={`nexus-panel ${className}`.trim()}><header>{Icon && <span className="nexus-panel-icon"><Icon size={17} /></span>}<div><h3>{title}</h3><p>{subtitle}</p></div></header><div className="panel-body">{children}</div></article>; }
+function Panel({ title, subtitle, icon: Icon, className = '', children }: { title: string; subtitle?: string; icon?: typeof Home; className?: string; children: ReactNode }) { return <article className={`nexus-panel ${className}`.trim()}><header>{Icon && <span className="nexus-panel-icon"><Icon size={17} /></span>}<div><h3>{title}</h3>{subtitle && <p>{subtitle}</p>}</div></header><div className="panel-body">{children}</div></article>; }
 function StatusBadge({ tone, children }: { tone: Tone; children: ReactNode }) { return <span className={`status-badge tone-${tone}`}><span />{children}</span>; }
 function InlineAlert({ tone, title, message }: { tone: Tone; title: string; message: string }) { return <div className={`nexus-inline-alert tone-${tone}`}><strong>{title}</strong><span>{message}</span></div>; }
 function EmptyMini({ text }: { text: string }) { return <p className="empty-mini">{text}</p>; }

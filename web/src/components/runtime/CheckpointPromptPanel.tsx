@@ -103,7 +103,6 @@ export default function CheckpointPromptPanel() {
     <header>
       <div>
         <h3>Checkpoint 提示词</h3>
-        <p>统一配置任务保存断点的时机、摘要内容和交接要求；适用于所有连接到 NexusDock 的节点。</p>
       </div>
       <span className={`checkpoint-prompt-source ${settings?.source === 'custom' ? 'is-custom' : ''}`}>{settings?.source === 'custom' ? '自定义' : '默认'}</span>
     </header>

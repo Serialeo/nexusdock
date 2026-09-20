@@ -206,14 +206,12 @@ export default function MCPPage({ nodeID, refreshToken }: { nodeID: string; refr
 
   return <section className="mcp-page">
     {notice && <div className={`nx-alert is-${notice.tone}`} role="status"><span>{notice.text}</span><button type="button" onClick={() => setNotice(null)}>关闭</button></div>}
-    <header className="mcp-heading">
-      <div><span className="nexus-eyebrow">AGENTDOCK RUNTIME</span><h2>MCP 服务</h2><p>Nexus 仅转发 AgentDock 的动态 MCP 管理接口；密钥值不会回显。</p></div>
-      <button type="button" className="nx-button" onClick={() => setAddOpen(true)}><CirclePlus size={16} />添加 MCP</button>
-    </header>
-
     <section className={`mcp-layout mobile-drilldown ${mobileDetailOpen ? 'is-detail-open' : 'is-list-open'}`}>
       <aside className="mcp-list-panel mobile-drilldown-list">
-        <div className="mcp-list-summary"><strong>{servers.length}</strong><span>个已注册服务</span></div>
+        <header className="mcp-list-summary">
+          <div><strong>{servers.length}</strong><span>个已注册服务</span></div>
+          <button type="button" className="nx-button is-small" onClick={() => setAddOpen(true)}><CirclePlus size={14} />添加 MCP</button>
+        </header>
         <div className="mcp-server-list">
           {loading && servers.length === 0 ? <p className="empty-mini">正在读取 MCP 服务…</p> : null}
           {!loading && servers.length === 0 ? <div className="mcp-empty"><Cable size={24} /><strong>尚未注册 MCP</strong><span>添加 HTTP 或 stdio MCP 服务后会显示在这里。</span></div> : null}

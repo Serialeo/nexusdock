@@ -1,58 +1,138 @@
-.ops-task-filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px;
-  padding: 12px;
+/* 任务中心统一控制栏 */
+.ops-task-panel {
+  margin-bottom: 12px;
   border: 1px solid var(--nx-line);
   border-radius: 7px;
   background: #fff;
+  overflow: hidden;
 }
-.ops-task-filters > label { display: grid; gap: 5px; color: var(--nx-muted); font-size: 11px; }
-.ops-task-filters select,
-.ops-task-filters input {
-  min-width: 130px;
-  max-width: 100%;
-  height: 34px;
-  padding: 0 9px;
+
+.ops-task-primary-row {
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ops-task-primary-row .ops-segmented {
+  flex-shrink: 0;
+}
+
+.ops-task-primary-row .ops-search {
+  flex: 1 1 240px;
+  min-width: 180px;
+}
+
+.ops-task-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.ops-task-secondary-row {
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--nx-line);
+  background: var(--nx-soft-2);
+  font-size: 11px;
+}
+
+.ops-task-filters-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ops-task-filters-inline > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--nx-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ops-task-filters-inline select,
+.ops-task-filters-inline input {
+  height: 28px;
+  padding: 0 8px;
   border: 1px solid var(--nx-line-strong);
   border-radius: 5px;
   background: #fff;
   color: var(--nx-text);
   font: inherit;
-}
-.ops-task-filters > small { align-self: center; color: var(--nx-muted); font-size: 10px; }
-.ops-task-filters > button { margin-left: auto; }
-.ops-task-selection {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 9px;
-  min-height: 46px;
-  padding: 8px 12px;
-  border: 1px solid var(--nx-line);
-  border-radius: 7px;
-  background: #fff;
   font-size: 11px;
 }
-.ops-task-selection > label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
-.ops-task-selection > span { color: var(--nx-muted); }
-.ops-task-selection > span[role="status"] { display: flex; align-items: center; gap: 5px; }
-.ops-task-selection .ops-task-bulk-delete { margin-left: auto; }
-.ops-task-selection input,
-.ops-task-check input { width: 16px; height: 16px; margin: 0; accent-color: #171717; cursor: pointer; }
-.ops-task-selection input:disabled,
-.ops-task-check input:disabled { cursor: default; }
+
+.ops-task-filters-inline .nx-button {
+  height: 28px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.ops-task-selection-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+  color: var(--nx-muted);
+  font-size: 11px;
+}
+
+.ops-task-selection-inline > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--nx-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ops-task-selection-inline input[type="checkbox"],
+.ops-task-check input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #171717;
+  cursor: pointer;
+}
+
+.ops-task-selection-inline input:disabled,
+.ops-task-check input:disabled {
+  cursor: default;
+}
+
+.ops-task-selection-inline .nx-button {
+  height: 28px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.ops-task-selection-inline > span[role="status"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .ops-task-browser { display: grid; gap: 7px; min-width: 0; }
-.ops-task-browser .ops-task-rail { max-height: calc(100vh - 340px); min-height: 180px; }
+.ops-task-browser .ops-task-rail { max-height: calc(100vh - 300px); min-height: 180px; }
 .ops-task-row { display: grid; grid-template-columns: 30px minmax(0, 1fr); border-radius: 5px; min-width: 0; }
 .ops-task-row.is-checked { background: #f0f0f0; }
 .ops-task-check { display: flex; align-items: flex-start; justify-content: center; padding-top: 12px; cursor: pointer; }
 .ops-task-line:focus-visible,
-.ops-task-filters select:focus-visible,
-.ops-task-filters input:focus-visible,
+.ops-task-filters-inline select:focus-visible,
+.ops-task-filters-inline input:focus-visible,
 .ops-task-check input:focus-visible,
-.ops-task-selection input:focus-visible { outline: 2px solid #555; outline-offset: 2px; }
+.ops-task-selection-inline input:focus-visible { outline: 2px solid #555; outline-offset: 2px; }
 .ops-task-pagination { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; font-size: 10px; color: var(--nx-muted); }
 .ops-task-pagination > span { margin-right: auto; }
 .ops-task-delete-preview { display: grid; gap: 8px; max-height: 260px; overflow: auto; padding-left: 20px; }
@@ -60,13 +140,36 @@
 .ops-task-delete-preview code { display: block; overflow-wrap: anywhere; }
 .ops-task-delete-preview code { color: var(--nx-muted); font-size: 10px; margin-top: 3px; }
 .ops-task-delete-errors { max-height: 180px; overflow: auto; overflow-wrap: anywhere; padding: 10px 10px 10px 25px; border: 1px solid var(--nx-danger-line); border-radius: 5px; background: var(--nx-danger-bg); color: var(--nx-danger); font-size: 11px; }
-@media (max-width: 760px) {
-  .ops-task-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ops-task-filters select,
-  .ops-task-filters input { min-width: 0; width: 100%; }
-  .ops-task-filters > small { grid-column: 1 / -1; }
-  .ops-task-filters > button { margin: 0; }
-  .ops-task-selection { gap: 8px; }
-  .ops-task-selection .ops-task-bulk-delete { margin-left: 0; }
+
+@media (max-width: 860px) {
+  .ops-task-primary-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .ops-task-primary-row .ops-segmented {
+    overflow-x: auto;
+    width: 100%;
+  }
+  .ops-task-head-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+  .ops-task-head-actions .nx-button {
+    flex: 1;
+  }
+  .ops-task-secondary-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .ops-task-filters-inline,
+  .ops-task-selection-inline {
+    width: 100%;
+    margin-left: 0;
+  }
+  .ops-task-selection-inline .ops-task-bulk-delete {
+    margin-left: auto;
+  }
   .ops-task-browser .ops-task-rail { max-height: none; }
 }

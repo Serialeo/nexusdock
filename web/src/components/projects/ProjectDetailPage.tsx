@@ -199,9 +199,18 @@ export default function ProjectDetailPage({ projectID, nodes, onBack }: { projec
 
   return <section className="project-detail-page">
     <header className="project-detail-heading">
-      <button type="button" className="nx-button is-secondary is-small" onClick={onBack}><ArrowLeft size={14} />Projects</button>
-      <div className="project-detail-title"><span className="nexus-eyebrow">WORK / PROJECT</span><h2>{project?.name || projectID}</h2><p>{project?.orchestration_policy || '尚未填写协作说明。'}</p></div>
-      <div className="project-detail-actions"><button type="button" className="nx-button is-secondary" disabled={loading} onClick={() => void reload()}><RefreshCw size={15} />刷新</button><button type="button" className="nx-button" disabled={!project?.enabled} onClick={openCreate}><CirclePlus size={16} />添加 Deployment</button></div>
+      <div className="project-detail-lead">
+        <button type="button" className="nx-button is-secondary is-small" onClick={onBack} title="返回 Projects"><ArrowLeft size={14} />Projects</button>
+        <span className="project-breadcrumb-sep">/</span>
+        <div className="project-detail-title">
+          <h2>{project?.name || projectID}</h2>
+          {project?.orchestration_policy && <span className="project-detail-desc">{project.orchestration_policy}</span>}
+        </div>
+      </div>
+      <div className="project-detail-actions">
+        <button type="button" className="nx-button is-secondary is-small" disabled={loading} onClick={() => void reload()}><RefreshCw size={14} />刷新</button>
+        <button type="button" className="nx-button is-small" disabled={!project?.enabled} onClick={openCreate}><CirclePlus size={15} />添加 Deployment</button>
+      </div>
     </header>
 
     <section className="project-detail-meta">
@@ -221,7 +230,7 @@ export default function ProjectDetailPage({ projectID, nodes, onBack }: { projec
     </nav>
 
     {activeTab === 'deployments' && <section className="deployment-panel">
-      <header><div><CloudCog size={18} /><span><strong>Deployments</strong><small>每个 Deployment 固定绑定一个 Node；Project Folder 可选，只提供默认 cwd 与 Project Prompt 边界。</small></span></div><button type="button" className="nx-button is-small" disabled={!project?.enabled} onClick={openCreate}><CirclePlus size={14} />添加</button></header>
+      <header><div><CloudCog size={18} /><span><strong>Deployments</strong></span></div><button type="button" className="nx-button is-small" disabled={!project?.enabled} onClick={openCreate}><CirclePlus size={14} />添加</button></header>
       {deployments.length === 0 ? <div className="deployment-empty"><FolderTree size={24} /><strong>还没有 Deployment</strong><span>先选择一个 Node；Project Folder 可以稍后再配置。</span></div> : <div className="deployment-list">
         {deployments.map((deployment) => {
           const node = nodes.find((item) => item.id === deployment.node_id);

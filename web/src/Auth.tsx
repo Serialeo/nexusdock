@@ -97,7 +97,7 @@ export function LoginPage() {
       <section className="auth-login" aria-label="NexusDock">
         <div className="auth-brand"><span aria-hidden="true">N</span><strong>NexusDock</strong></div>
         <form className="auth-card" aria-labelledby="login-title" onSubmit={submit}>
-          <header><span className="auth-card-icon"><LockKeyhole size={21} /></span><div><h2 id="login-title">登录控制台</h2><p>使用 NexusDock 管理员账号继续</p></div></header>
+          <header><span className="auth-card-icon"><LockKeyhole size={21} /></span><h2 id="login-title">登录控制台</h2></header>
           {params.get('changed') === '1' && <div className="auth-success" role="status"><CheckCircle2 size={17} />密码已更新，请重新登录。</div>}
           {initialized === false && <div className="auth-error" role="alert">管理员尚未初始化。请在 DockMini 本机运行管理命令后刷新。</div>}
           {error && <div id="login-error" className="auth-error" role="alert">{error}</div>}

@@ -33,7 +33,7 @@ export class ApiError extends Error {
   }
 }
 
-export type ApiOptions = RequestInit & { timeoutMs?: number };
+export type ApiOptions = RequestInit & { timeoutMs?: number; suppressSessionExpiry?: boolean };
 
 let csrfToken = '';
 
@@ -65,10 +65,10 @@ function shouldSignalSessionExpiry(path: string, status: number): boolean {
 }
 
 export async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  const { timeoutMs = 15_000, suppressSessionExpiry = false, ...requestOptions } = options;
   const controller = new AbortController();
-  const timeoutMs = options.timeoutMs ?? 15_000;
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
-  const externalSignal = options.signal;
+  const externalSignal = requestOptions.signal;
   const abort = () => controller.abort();
   if (externalSignal?.aborted) {
     controller.abort();
@@ -78,16 +78,16 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
   }
 
   try {
-    const headers = new Headers(options.headers);
+    const headers = new Headers(requestOptions.headers);
     headers.set('Accept', 'application/json');
-    if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-    if (csrfToken && isUnsafeMethod(options.method) && !headers.has('X-CSRF-Token')) {
+    if (requestOptions.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    if (csrfToken && isUnsafeMethod(requestOptions.method) && !headers.has('X-CSRF-Token')) {
       headers.set('X-CSRF-Token', csrfToken);
     }
     const url = requestURL(path);
 
     const response = await fetch(url.toString(), {
-      ...options,
+      ...requestOptions,
       headers,
       signal: controller.signal,
       credentials: 'same-origin',
@@ -107,7 +107,7 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
 
     const errorBody = body as ApiErrorBody;
     if (!response.ok || errorBody.error || errorBody.code) {
-      if (shouldSignalSessionExpiry(path, response.status)) {
+      if (!suppressSessionExpiry && shouldSignalSessionExpiry(path, response.status)) {
         clearCSRFToken();
         window.dispatchEvent(new CustomEvent('nexus:session-expired'));
       }
