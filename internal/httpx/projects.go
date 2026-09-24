@@ -406,8 +406,8 @@ func (s *Server) tryApplyProjectDeployment(ctx context.Context, deployment proje
 	if !deployment.Enabled {
 		applyStatus = protocol.DeploymentApplyDisabled
 	}
-	effectivePermissions := deployment.Permissions
-	effectivePermissions.FullAccess = node.FullAccess
+	// 执行下发与 Target/MCP 共用有效权限计算，不把回退配置作为当前限制下发。
+	effectivePermissions := effectiveProjectPermissions(deployment.Permissions, node.FullAccess)
 	payload := protocol.Deployment{
 		ID: deployment.ID, ProjectID: deployment.ProjectID, NodeID: deployment.NodeID,
 		WorkingFolder: deployment.WorkingFolder, Role: deployment.Role, Purpose: deployment.Purpose,

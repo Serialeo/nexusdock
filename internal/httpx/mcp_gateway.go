@@ -370,6 +370,9 @@ func allowsHistoricalTargetControl(name string, arguments map[string]any) bool {
 		return action == "" || action == "list" || action == "status"
 	case "session_act":
 		return action == "kill" || action == "kill_all"
+	case "browser_session":
+		// 只允许关闭所属旧会话；start 与带 close_after 的浏览器操作仍需当前权限。
+		return action == "close"
 	case "acp_session":
 		return action == "list" || action == "inspect" || action == "close" || action == "delete"
 	case "acp_prompt":
