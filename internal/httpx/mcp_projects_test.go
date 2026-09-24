@@ -399,6 +399,31 @@ func TestProjectContextRefreshesOnlyBoundTargetAndRejectsRevokedTarget(t *testin
 	}
 }
 
+func TestEffectiveProjectPermissionsMaterializesNodeFullAccess(t *testing.T) {
+	configured := protocol.DeploymentPermissions{
+		Files:      protocol.FileCapabilityReadOnly,
+		Shell:      false,
+		Browser:    false,
+		DynamicMCP: false,
+		ACP:        false,
+	}
+
+	fallback := effectiveProjectPermissions(configured, false)
+	if fallback != configured {
+		t.Fatalf("Full Access disabled changed fallback permissions: got=%#v want=%#v", fallback, configured)
+	}
+
+	effective := effectiveProjectPermissions(configured, true)
+	if !effective.FullAccess ||
+		effective.Files != protocol.FileCapabilityReadWrite ||
+		!effective.Shell ||
+		!effective.Browser ||
+		!effective.DynamicMCP ||
+		!effective.ACP {
+		t.Fatalf("Full Access did not materialize effective permissions: %#v", effective)
+	}
+}
+
 func TestProjectContextRevisionsIgnoreProjectRowMetadataRevision(t *testing.T) {
 	before := projectstore.Project{ID: "project_context_identity", Name: "Before", Revision: "rev-1", OrchestrationPolicy: "old guidance", Enabled: true}
 	after := before

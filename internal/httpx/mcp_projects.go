@@ -655,6 +655,18 @@ func projectTargetContextRevision(project projectstore.Project, deployment proje
 
 func effectiveProjectPermissions(configured protocol.DeploymentPermissions, nodeFullAccess bool) protocol.DeploymentPermissions {
 	configured.FullAccess = nodeFullAccess
+	if !nodeFullAccess {
+		return configured
+	}
+
+	// Full Access 覆盖 Deployment 的细粒度回退配置。Target/MCP 返回的是当前
+	// 有效权限，不能同时暴露 full_access=true 与 files=read_only/shell=false，
+	// 否则调用方会把仅在关闭 Full Access 后生效的回退值误判成当前限制。
+	configured.Files = protocol.FileCapabilityReadWrite
+	configured.Shell = true
+	configured.Browser = true
+	configured.DynamicMCP = true
+	configured.ACP = true
 	return configured
 }
 
